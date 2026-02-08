@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+node_modules
+.wwebjs_auth
+products.db
+cookies.json
+logs/
+data/
+.env
+.git
+.gitignore
+*.md
+test_*.py
+whatsapp_bridge/node_modules
+whatsapp_bridge/.wwebjs_auth

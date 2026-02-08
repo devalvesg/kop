@@ -1,0 +1,26 @@
+services:
+  whatsapp-bridge:
+    build: ./whatsapp_bridge
+    container_name: kop-whatsapp-bridge
+    ports:
+      - "3001:3001"
+    volumes:
+      - whatsapp-auth:/app/.wwebjs_auth
+    restart: unless-stopped
+
+  scraper:
+    build: .
+    container_name: kop-scraper
+    env_file: .env
+    environment:
+      - WHATSAPP_BRIDGE_URL=http://whatsapp-bridge:3001
+      - HEADLESS=true
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      - whatsapp-bridge
+    restart: unless-stopped
+
+volumes:
+  whatsapp-auth:

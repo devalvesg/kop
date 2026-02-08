@@ -1,0 +1,20 @@
+[Unit]
+Description=KOP-ML Scraper (Pelando + Mercado Livre)
+After=network.target kop-whatsapp-bridge.service
+Wants=kop-whatsapp-bridge.service
+
+[Service]
+Type=simple
+User=kop
+Group=kop
+WorkingDirectory=/opt/kop-ml
+EnvironmentFile=/opt/kop-ml/.env
+Environment=HEADLESS=true
+ExecStart=/opt/kop-ml/venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

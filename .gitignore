@@ -1,0 +1,11 @@
+.env
+cookies.json
+*.db
+logs/
+data/
+__pycache__/
+*.pyc
+whatsapp_bridge/node_modules/
+whatsapp_bridge/.wwebjs_auth/
+.venv/
+venv/

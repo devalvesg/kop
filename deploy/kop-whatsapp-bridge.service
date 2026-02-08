@@ -1,0 +1,17 @@
+[Unit]
+Description=KOP-ML WhatsApp Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=kop
+Group=kop
+WorkingDirectory=/opt/kop-ml/whatsapp_bridge
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
