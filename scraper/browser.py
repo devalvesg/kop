@@ -11,6 +11,8 @@ logger = logging.getLogger("BROWSER")
 
 def _build_options(headless: bool = False) -> Options:
     options = Options()
+    if config.CHROME_BINARY:
+        options.binary_location = config.CHROME_BINARY
     if headless:
         options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
