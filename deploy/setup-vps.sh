@@ -2,55 +2,93 @@
 set -e
 
 # =============================================================
-# KOP-ML - Setup inicial da VPS Oracle Linux
-# Rodar como root: sudo bash setup-vps.sh
+# KOP - Setup inicial da VPS (Ubuntu / Oracle Linux)
+# Rodar como root: sudo bash setup-vps.sh <REPO_URL>
 # =============================================================
 
 echo "========================================="
-echo "  KOP-ML - Setup VPS Oracle Linux"
+echo "  KOP - Setup VPS"
 echo "========================================="
+
+# Detectar package manager
+if command -v apt-get &> /dev/null; then
+    PKG_MANAGER="apt"
+elif command -v dnf &> /dev/null; then
+    PKG_MANAGER="dnf"
+else
+    echo "ERRO: Package manager não suportado (precisa de apt ou dnf)"
+    exit 1
+fi
+echo "Package manager: $PKG_MANAGER"
 
 # 1. Instalar dependências do sistema
 echo "[1/8] Instalando dependências do sistema..."
-dnf install -y epel-release
-dnf install -y \
-    python3.11 \
-    python3.11-pip \
-    git \
-    wget \
-    unzip \
-    fontconfig \
-    liberation-fonts \
-    nss \
-    atk \
-    at-spi2-atk \
-    cups-libs \
-    libdrm \
-    libXcomposite \
-    libXdamage \
-    libXrandr \
-    mesa-libgbm \
-    alsa-lib \
-    pango \
-    gtk3
+if [ "$PKG_MANAGER" = "apt" ]; then
+    apt-get update
+    apt-get install -y \
+        python3 \
+        python3-pip \
+        python3-venv \
+        git \
+        wget \
+        unzip \
+        fonts-liberation \
+        libnss3 \
+        libxss1 \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libgtk-3-0 \
+        libdrm2 \
+        libgbm1
+else
+    dnf install -y epel-release
+    dnf install -y \
+        python3.11 \
+        python3.11-pip \
+        git \
+        wget \
+        unzip \
+        fontconfig \
+        liberation-fonts \
+        nss \
+        atk \
+        at-spi2-atk \
+        cups-libs \
+        libdrm \
+        mesa-libgbm \
+        alsa-lib \
+        pango \
+        gtk3
+fi
 
 # 2. Instalar Node.js 18
 echo "[2/8] Instalando Node.js 18..."
 if ! command -v node &> /dev/null; then
-    dnf module enable -y nodejs:18
-    dnf install -y nodejs
+    if [ "$PKG_MANAGER" = "apt" ]; then
+        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+        apt-get install -y nodejs
+    else
+        dnf module enable -y nodejs:18
+        dnf install -y nodejs
+    fi
 fi
 echo "Node.js: $(node --version)"
 
 # 3. Instalar Chromium
 echo "[3/8] Instalando Chromium..."
-dnf install -y chromium
-CHROMIUM_PATH=$(which chromium-browser 2>/dev/null || which chromium 2>/dev/null)
+if [ "$PKG_MANAGER" = "apt" ]; then
+    apt-get install -y chromium-browser || apt-get install -y chromium
+else
+    dnf install -y chromium
+fi
+CHROMIUM_PATH=$(which chromium-browser 2>/dev/null || which chromium 2>/dev/null || echo "não encontrado")
 echo "Chromium: $CHROMIUM_PATH"
 
-# 4. Instalar ChromeDriver compatível
+# 4. Instalar ChromeDriver
 echo "[4/8] Instalando ChromeDriver..."
-if ! command -v chromedriver &> /dev/null; then
+if [ "$PKG_MANAGER" = "apt" ]; then
+    apt-get install -y chromium-chromedriver 2>/dev/null || echo "ChromeDriver será gerenciado pelo Selenium"
+else
     dnf install -y chromedriver 2>/dev/null || echo "ChromeDriver será gerenciado pelo Selenium"
 fi
 
@@ -70,7 +108,7 @@ APP_DIR="/opt/kop-ml"
 
 if [ -z "$REPO_URL" ]; then
     echo "AVISO: URL do repositório não informada."
-    echo "Uso: sudo bash setup-vps.sh https://github.com/SEU_USER/kop-ml.git"
+    echo "Uso: sudo bash setup-vps.sh https://github.com/SEU_USER/kop.git"
     echo "Criando diretório vazio..."
     mkdir -p "$APP_DIR"
 else
@@ -87,10 +125,14 @@ chown -R kop:kop "$APP_DIR"
 # 7. Instalar dependências do projeto
 echo "[7/8] Instalando dependências do projeto..."
 
+# Detectar comando python
+PYTHON_CMD=$(which python3.11 2>/dev/null || which python3 2>/dev/null)
+echo "Python: $PYTHON_CMD"
+
 # Python venv + deps
 su - kop -c "
     cd $APP_DIR
-    python3.11 -m venv venv
+    $PYTHON_CMD -m venv venv
     venv/bin/pip install --upgrade pip
     venv/bin/pip install -r requirements.txt
 "
