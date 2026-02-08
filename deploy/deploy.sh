@@ -13,6 +13,7 @@ echo "[DEPLOY] Iniciando deploy..."
 
 # 1. Pull do código (como user kop, dono do repo)
 echo "[DEPLOY] Atualizando código..."
+sudo -u kop git config --global --add safe.directory "$APP_DIR"
 sudo -u kop git pull origin main
 
 # 2. Atualizar dependências Python
