@@ -64,7 +64,8 @@ def _is_logged_in(driver: webdriver.Chrome) -> bool:
 def get_driver() -> webdriver.Chrome:
     logger.info(f"Iniciando Chrome WebDriver (headless={config.HEADLESS})...")
     options = _build_options(headless=config.HEADLESS)
-    driver = webdriver.Chrome(options=options)
+    service = Service(executable_path=config.CHROMEDRIVER_PATH) if config.CHROMEDRIVER_PATH else Service()
+    driver = webdriver.Chrome(options=options, service=service)
 
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",

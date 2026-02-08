@@ -11,6 +11,7 @@ WorkingDirectory=/opt/kop-ml
 EnvironmentFile=/opt/kop-ml/.env
 Environment=HEADLESS=true
 Environment=CHROME_BINARY=/usr/bin/chromium-browser
+Environment=CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ExecStart=/opt/kop-ml/venv/bin/python main.py
 Restart=on-failure
 RestartSec=10

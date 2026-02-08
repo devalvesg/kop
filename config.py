@@ -31,6 +31,7 @@ WHATSAPP_GROUP_IDS = [
 SCRAPE_INTERVAL_SECONDS = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "60"))
 HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
 CHROME_BINARY = os.getenv("CHROME_BINARY", "")  # Ex: /usr/bin/chromium-browser
+CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "")  # Ex: /usr/bin/chromedriver
 
 # URLs
 PELANDO_URL = "https://www.pelando.com.br/"
