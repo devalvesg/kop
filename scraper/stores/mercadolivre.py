@@ -100,7 +100,16 @@ class MercadoLivreStore(BaseStore):
                     time.sleep(2)
                     current_url = driver.current_url
                 else:
-                    logger.warning(f"Não conseguiu resolver short link: {current_url}")
+                    # Fallback: esperar o browser resolver o redirect
+                    logger.warning(f"requests não resolveu, aguardando browser redirect...")
+                    for _ in range(10):
+                        time.sleep(2)
+                        current_url = driver.current_url
+                        if "mercadolivre.com.br" in current_url:
+                            logger.info(f"Browser resolveu redirect: {current_url[:80]}")
+                            break
+                    else:
+                        logger.warning(f"Browser também não resolveu short link: {current_url}")
 
             # Se não estiver no ML, algo deu errado
             if "mercadolivre.com.br" not in current_url:
@@ -389,20 +398,20 @@ class MercadoLivreStore(BaseStore):
 
     def _resolve_short_link(self, url: str) -> str:
         """Resolve short link do ML seguindo redirects via requests."""
-        try:
-            resp = requests.head(url, allow_redirects=True, timeout=10, headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36"
-            })
-            return resp.url
-        except Exception:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        for method in (requests.head, requests.get):
             try:
-                resp = requests.get(url, allow_redirects=True, timeout=10, headers={
-                    "User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36"
-                })
-                return resp.url
+                resp = method(url, allow_redirects=True, timeout=15, headers=headers)
+                resolved = resp.url
+                logger.info(f"Short link resolvido ({method.__name__}): {resolved[:100]}")
+                if "mercadolivre.com.br" in resolved:
+                    return resolved
             except Exception as e:
-                logger.error(f"Erro ao resolver short link: {e}")
-                return ""
+                logger.warning(f"Erro {method.__name__} ao resolver short link: {e}")
+        return ""
 
     def _close_extra_tabs(self, driver):
         """Fecha abas extras e volta para a principal."""
