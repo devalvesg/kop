@@ -14,6 +14,22 @@ logger = logging.getLogger("MAIN")
 
 driver = None
 scheduler = None
+_shutting_down = False
+
+
+def _ensure_driver():
+    """Recria o driver se ele morreu."""
+    global driver
+    try:
+        driver.current_url
+    except Exception:
+        logger.warning("WebDriver inativo, recriando...")
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        driver = get_driver()
+        logger.info("WebDriver recriado com sucesso")
 
 
 def scrape_and_send():
@@ -23,6 +39,7 @@ def scrape_and_send():
     logger.info("=" * 60)
 
     try:
+        _ensure_driver()
         products = scrape_pelando(driver)
 
         if not products:
@@ -93,11 +110,17 @@ def scrape_and_send():
 
 
 def shutdown(signum, frame):
-    global driver, scheduler
+    global driver, scheduler, _shutting_down
+    if _shutting_down:
+        return
+    _shutting_down = True
     logger.info("Recebido sinal de encerramento, finalizando...")
 
     if scheduler:
-        scheduler.shutdown(wait=False)
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception:
+            pass
 
     if driver:
         try:
