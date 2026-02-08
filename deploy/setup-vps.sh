@@ -25,10 +25,13 @@ echo "Package manager: $PKG_MANAGER"
 echo "[1/8] Instalando dependências do sistema..."
 if [ "$PKG_MANAGER" = "apt" ]; then
     apt-get update
+    apt-get install -y software-properties-common
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update
     apt-get install -y \
-        python3 \
-        python3-pip \
-        python3-venv \
+        python3.11 \
+        python3.11-venv \
+        python3.11-dev \
         git \
         wget \
         unzip \
@@ -125,9 +128,9 @@ chown -R kop:kop "$APP_DIR"
 # 7. Instalar dependências do projeto
 echo "[7/8] Instalando dependências do projeto..."
 
-# Detectar comando python
+# Detectar comando python (priorizar 3.11)
 PYTHON_CMD=$(which python3.11 2>/dev/null || which python3 2>/dev/null)
-echo "Python: $PYTHON_CMD"
+echo "Python: $PYTHON_CMD ($($PYTHON_CMD --version))"
 
 # Python venv + deps
 su - kop -c "
