@@ -1,6 +1,7 @@
 import logging
 import re
 import time
+import requests
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -89,18 +90,17 @@ class MercadoLivreStore(BaseStore):
             current_url = driver.current_url
             logger.info(f"URL atual: {current_url}")
 
-            # Se for short link, aguardar redirect para mercadolivre.com.br
+            # Se for short link, resolver redirect via requests (mais confiável que headless)
             if "mercadolivre.com/sec/" in current_url:
-                logger.info("Short link detectado, aguardando redirect...")
-                try:
-                    WebDriverWait(driver, 15).until(
-                        lambda d: "mercadolivre.com.br" in d.current_url
-                    )
+                logger.info("Short link detectado, resolvendo redirect via requests...")
+                resolved_url = self._resolve_short_link(current_url)
+                if resolved_url and "mercadolivre.com.br" in resolved_url:
+                    logger.info(f"Redirect resolvido: {resolved_url[:80]}...")
+                    driver.get(resolved_url)
+                    time.sleep(2)
                     current_url = driver.current_url
-                    logger.info(f"Redirecionou para: {current_url}")
-                except TimeoutException:
-                    current_url = driver.current_url
-                    logger.warning(f"Timeout no redirect, URL atual: {current_url}")
+                else:
+                    logger.warning(f"Não conseguiu resolver short link: {current_url}")
 
             # Se não estiver no ML, algo deu errado
             if "mercadolivre.com.br" not in current_url:
@@ -386,6 +386,23 @@ class MercadoLivreStore(BaseStore):
             return f"MLB{match.group(1)}"
         # Fallback: usar hash da URL
         return f"MLB{abs(hash(url)) % 10000000000}"
+
+    def _resolve_short_link(self, url: str) -> str:
+        """Resolve short link do ML seguindo redirects via requests."""
+        try:
+            resp = requests.head(url, allow_redirects=True, timeout=10, headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36"
+            })
+            return resp.url
+        except Exception:
+            try:
+                resp = requests.get(url, allow_redirects=True, timeout=10, headers={
+                    "User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36"
+                })
+                return resp.url
+            except Exception as e:
+                logger.error(f"Erro ao resolver short link: {e}")
+                return ""
 
     def _close_extra_tabs(self, driver):
         """Fecha abas extras e volta para a principal."""
