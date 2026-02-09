@@ -207,6 +207,7 @@ class MercadoLivreStore(BaseStore):
 
         except TimeoutException:
             logger.warning("Botão de gerar link não encontrado (usuário pode não estar logado como afiliado)")
+            logger.warning(f"URL: {current_url}")
             return ""
         except Exception as e:
             logger.error(f"Erro ao gerar link de afiliado: {e}")
