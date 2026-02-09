@@ -73,7 +73,7 @@ def generate_message(product: Product) -> str:
 
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="meta-llama/llama-4-maverick-17b-128e-instruct",
             max_tokens=300,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
