@@ -72,7 +72,6 @@ def generate_message(product: Product) -> str:
             max_tokens=300,
             temperature=1.0,
             top_p=0.9,
-            repetition_penalty=1.15,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
