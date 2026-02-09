@@ -122,7 +122,7 @@ class MercadoLivreStore(BaseStore):
                     logger.warning("Tentando resolver short link via HTTP...")
                     resolved_url = self._resolve_short_link(short_link_url)
                     if resolved_url and "mercadolivre.com.br" in resolved_url:
-                        logger.info(f"Resolvido via HTTP: {resolved_url[:80]}")
+                        logger.info(f"Resolvido via HTTP: {resolved_url[:200]}")
                         driver.get(resolved_url)
                         time.sleep(2)
                         current_url = driver.current_url
@@ -460,7 +460,7 @@ class MercadoLivreStore(BaseStore):
         return ""
 
     def _resolve_short_link(self, url: str) -> str:
-        """Resolve short link do ML seguindo redirects."""
+        """Resolve short link do ML seguindo redirects passo a passo (preserva params como ref)."""
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -472,7 +472,7 @@ class MercadoLivreStore(BaseStore):
             scraper = cloudscraper.create_scraper()
             resp = scraper.get(url, allow_redirects=True, timeout=15)
             resolved = resp.url
-            logger.info(f"Short link resolvido (cloudscraper): {resolved[:100]}")
+            logger.info(f"Short link resolvido (cloudscraper): {resolved[:150]}")
             if "mercadolivre.com.br" in resolved:
                 return resolved
         except ImportError:
@@ -480,12 +480,36 @@ class MercadoLivreStore(BaseStore):
         except Exception as e:
             logger.warning(f"Erro cloudscraper: {e}")
 
-        # 2. Fallback: requests
+        # 2. Seguir redirects manualmente para preservar parâmetros (ref, etc)
+        try:
+            from urllib.parse import urlparse
+            session = requests.Session()
+            current_url = url
+            for step in range(10):
+                resp = session.get(current_url, allow_redirects=False, timeout=15, headers=headers)
+                location = resp.headers.get("Location", "")
+                logger.info(f"Redirect step {step}: HTTP {resp.status_code} -> {location[:150] if location else 'N/A'}")
+
+                if resp.status_code in (301, 302, 303, 307, 308) and location:
+                    # Resolver URLs relativas
+                    if location.startswith("/"):
+                        parsed = urlparse(current_url)
+                        location = f"{parsed.scheme}://{parsed.netloc}{location}"
+                    current_url = location
+                    if "mercadolivre.com.br" in current_url:
+                        logger.info(f"Short link resolvido (manual step {step}): {current_url[:150]}")
+                        return current_url
+                else:
+                    break
+        except Exception as e:
+            logger.warning(f"Erro ao seguir redirects manualmente: {e}")
+
+        # 3. Fallback: requests com allow_redirects=True
         for method in (requests.head, requests.get):
             try:
                 resp = method(url, allow_redirects=True, timeout=15, headers=headers)
                 resolved = resp.url
-                logger.info(f"Short link resolvido ({method.__name__}): {resolved[:100]}")
+                logger.info(f"Short link resolvido ({method.__name__}): {resolved[:150]}")
                 if "mercadolivre.com.br" in resolved:
                     return resolved
             except Exception as e:
