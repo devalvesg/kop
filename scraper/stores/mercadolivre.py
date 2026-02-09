@@ -90,7 +90,7 @@ class MercadoLivreStore(BaseStore):
             current_url = driver.current_url
             logger.info(f"URL atual: {current_url}")
 
-           time.sleep(2)
+            time.sleep(2)
 
             # Se não estiver no ML, algo deu errado
             if "mercadolivre.com.br" not in current_url:
