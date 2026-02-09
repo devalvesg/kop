@@ -90,10 +90,49 @@ class MercadoLivreStore(BaseStore):
             current_url = driver.current_url
             logger.info(f"URL atual: {current_url}")
 
-            time.sleep(2)
+            # Se for short link, aguardar redirect
+            if "mercadolivre.com/sec/" in current_url:
+                short_link_url = current_url
+                logger.info("Short link detectado, aguardando browser resolver redirect...")
+
+                # Camada 1: Aguardar browser resolver (com Xvfb deve funcionar)
+                resolved = False
+                for i in range(15):
+                    time.sleep(2)
+                    current_url = driver.current_url
+                    if "mercadolivre.com.br" in current_url:
+                        logger.info(f"Browser resolveu redirect ({(i+1)*2}s): {current_url[:80]}")
+                        resolved = True
+                        break
+                    logger.debug(f"Aguardando redirect... ({i+1}/15) URL: {current_url[:80]}")
+
+                # Camada 2: Extrair URL de redirect do page source (meta refresh, JS location)
+                if not resolved:
+                    logger.warning("Browser não resolveu, extraindo URL da página...")
+                    redirect_url = self._extract_redirect_from_page(driver)
+                    if redirect_url:
+                        logger.info(f"URL extraída da página: {redirect_url[:80]}")
+                        driver.get(redirect_url)
+                        time.sleep(2)
+                        current_url = driver.current_url
+                        resolved = "mercadolivre.com.br" in current_url
+
+                # Camada 3: Resolver via HTTP (cloudscraper/requests)
+                if not resolved:
+                    logger.warning("Tentando resolver short link via HTTP...")
+                    resolved_url = self._resolve_short_link(short_link_url)
+                    if resolved_url and "mercadolivre.com.br" in resolved_url:
+                        logger.info(f"Resolvido via HTTP: {resolved_url[:80]}")
+                        driver.get(resolved_url)
+                        time.sleep(2)
+                        current_url = driver.current_url
+                        resolved = "mercadolivre.com.br" in current_url
+
+                if not resolved:
+                    logger.error(f"Todas as tentativas falharam para short link: {short_link_url}")
 
             # Se não estiver no ML, algo deu errado
-            if "mercadolivre.com" not in current_url:
+            if "mercadolivre.com.br" not in current_url:
                 logger.error(f"Não chegou no ML, URL: {current_url}")
                 self._close_extra_tabs(driver)
                 return None
@@ -207,7 +246,6 @@ class MercadoLivreStore(BaseStore):
 
         except TimeoutException:
             logger.warning("Botão de gerar link não encontrado (usuário pode não estar logado como afiliado)")
-            logger.warning(f"URL: {current_url}")
             return ""
         except Exception as e:
             logger.error(f"Erro ao gerar link de afiliado: {e}")
@@ -378,12 +416,71 @@ class MercadoLivreStore(BaseStore):
         # Fallback: usar hash da URL
         return f"MLB{abs(hash(url)) % 10000000000}"
 
+    def _extract_redirect_from_page(self, driver) -> str:
+        """Extrai URL de redirect do page source (meta refresh, JS location, etc)."""
+        try:
+            page_source = driver.page_source
+
+            # Meta refresh: <meta http-equiv="refresh" content="0;url=...">
+            match = re.search(
+                r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\'][^"\']*url=([^"\'>\s]+)',
+                page_source, re.IGNORECASE
+            )
+            if match and "mercadolivre.com.br" in match.group(1):
+                return match.group(1)
+
+            # JS: window.location = "..." ou location.href = "..."
+            match = re.search(
+                r'(?:window\.)?location(?:\.href)?\s*=\s*["\']([^"\']+mercadolivre\.com\.br[^"\']*)["\']',
+                page_source
+            )
+            if match:
+                return match.group(1)
+
+            # JS: location.replace("...")
+            match = re.search(
+                r'location\.replace\s*\(\s*["\']([^"\']+mercadolivre\.com\.br[^"\']*)["\']',
+                page_source
+            )
+            if match:
+                return match.group(1)
+
+            # Qualquer URL de produto ML na página
+            match = re.search(
+                r'(https?://[^\s"\'<>]+mercadolivre\.com\.br/[^\s"\'<>]*MLB[^\s"\'<>]*)',
+                page_source
+            )
+            if match:
+                return match.group(1)
+
+            # Log snippet do page source para debug
+            logger.debug(f"Page source (500 chars): {page_source[:500]}")
+        except Exception as e:
+            logger.warning(f"Erro ao extrair redirect da página: {e}")
+        return ""
+
     def _resolve_short_link(self, url: str) -> str:
-        """Resolve short link do ML seguindo redirects via requests."""
+        """Resolve short link do ML seguindo redirects."""
         headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
+
+        # 1. Tentar com cloudscraper (lida com desafios Cloudflare básicos)
+        try:
+            import cloudscraper
+            scraper = cloudscraper.create_scraper()
+            resp = scraper.get(url, allow_redirects=True, timeout=15)
+            resolved = resp.url
+            logger.info(f"Short link resolvido (cloudscraper): {resolved[:100]}")
+            if "mercadolivre.com.br" in resolved:
+                return resolved
+        except ImportError:
+            logger.debug("cloudscraper não instalado, pulando")
+        except Exception as e:
+            logger.warning(f"Erro cloudscraper: {e}")
+
+        # 2. Fallback: requests
         for method in (requests.head, requests.get):
             try:
                 resp = method(url, allow_redirects=True, timeout=15, headers=headers)

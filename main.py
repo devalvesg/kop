@@ -5,7 +5,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 import config
 from database import db
-from scraper.browser import get_driver
+from scraper.browser import get_driver, stop_virtual_display
 from scraper.pelando_scraper import scrape_pelando
 from ai.message_generator import generate_message
 from messaging import telegram_sender, whatsapp_sender
@@ -128,6 +128,8 @@ def shutdown(signum, frame):
             logger.info("WebDriver encerrado")
         except Exception:
             pass
+
+    stop_virtual_display()
 
     sys.exit(0)
 
