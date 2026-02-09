@@ -138,7 +138,7 @@ def main():
     global driver, scheduler
 
     config.setup_logging()
-    logger.info("KOP-ML iniciando... (deploy test v1)")
+    logger.info("KOP-ML iniciando...")
 
     # Inicializar banco
     db.init_db()
