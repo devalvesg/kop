@@ -90,26 +90,7 @@ class MercadoLivreStore(BaseStore):
             current_url = driver.current_url
             logger.info(f"URL atual: {current_url}")
 
-            # Se for short link, resolver redirect via requests (mais confiável que headless)
-            if "mercadolivre.com/sec/" in current_url:
-                logger.info("Short link detectado, resolvendo redirect via requests...")
-                resolved_url = self._resolve_short_link(current_url)
-                if resolved_url and "mercadolivre.com.br" in resolved_url:
-                    logger.info(f"Redirect resolvido: {resolved_url[:80]}...")
-                    driver.get(resolved_url)
-                    time.sleep(2)
-                    current_url = driver.current_url
-                else:
-                    # Fallback: esperar o browser resolver o redirect
-                    logger.warning(f"requests não resolveu, aguardando browser redirect...")
-                    for _ in range(10):
-                        time.sleep(2)
-                        current_url = driver.current_url
-                        if "mercadolivre.com.br" in current_url:
-                            logger.info(f"Browser resolveu redirect: {current_url[:80]}")
-                            break
-                    else:
-                        logger.warning(f"Browser também não resolveu short link: {current_url}")
+           time.sleep(2)
 
             # Se não estiver no ML, algo deu errado
             if "mercadolivre.com.br" not in current_url:
