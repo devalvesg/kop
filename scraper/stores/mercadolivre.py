@@ -93,7 +93,7 @@ class MercadoLivreStore(BaseStore):
             time.sleep(2)
 
             # Se não estiver no ML, algo deu errado
-            if "mercadolivre.com.br" not in current_url:
+            if "mercadolivre.com" not in current_url:
                 logger.error(f"Não chegou no ML, URL: {current_url}")
                 self._close_extra_tabs(driver)
                 return None
