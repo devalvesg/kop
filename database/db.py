@@ -38,6 +38,14 @@ def init_db():
             processed_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Tabela para títulos/frases de abertura já usados (evita repetição na IA)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS used_titles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
     logger.info("Banco de dados inicializado")
@@ -134,3 +142,31 @@ def cleanup_old_deals(days: int = 1):
     conn.close()
     if deleted > 0:
         logger.info(f"Limpeza: {deleted} deals antigos removidos")
+
+
+def save_used_title(title: str):
+    """Salva uma frase de abertura já utilizada."""
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.execute("INSERT INTO used_titles (title) VALUES (?)", (title,))
+    conn.commit()
+    conn.close()
+
+
+def get_used_titles() -> list[str]:
+    """Retorna todas as frases de abertura usadas hoje."""
+    conn = sqlite3.connect(config.DB_PATH)
+    cursor = conn.execute("SELECT title FROM used_titles")
+    titles = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return titles
+
+
+def cleanup_used_titles():
+    """Limpa todas as frases de abertura usadas (reset diário)."""
+    conn = sqlite3.connect(config.DB_PATH)
+    cursor = conn.execute("DELETE FROM used_titles")
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    if deleted > 0:
+        logger.info(f"Limpeza: {deleted} títulos usados removidos")

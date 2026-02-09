@@ -7,7 +7,7 @@ import config
 from database import db
 from scraper.browser import get_driver, stop_virtual_display
 from scraper.pelando_scraper import scrape_pelando
-from ai.message_generator import generate_message
+from ai.message_generator import generate_message, extract_title
 from messaging import telegram_sender, whatsapp_sender
 
 logger = logging.getLogger("MAIN")
@@ -53,7 +53,12 @@ def scrape_and_send():
             try:
                 # Gerar mensagem com IA - se falhar, pula o produto
                 try:
-                    message = generate_message(product)
+                    used_titles = db.get_used_titles()
+                    message = generate_message(product, used_titles=used_titles)
+                    # Salvar frase de abertura usada
+                    title = extract_title(message)
+                    if title:
+                        db.save_used_title(title)
                     # Adicionar linha de cupom com formatação monospace (backticks)
                     if product.coupon:
                         message = f"{message}\n\n`Cupom de {product.coupon}`"
@@ -176,9 +181,15 @@ def main():
         hour=3,
         kwargs={"days": 1},
     )
+    scheduler.add_job(
+        db.cleanup_used_titles,
+        "cron",
+        hour=0,
+        minute=0,
+    )
 
     logger.info(
-        f"Scheduler iniciado - scraping a cada {config.SCRAPE_INTERVAL_SECONDS}s, limpeza diária às 03:00"
+        f"Scheduler iniciado - scraping a cada {config.SCRAPE_INTERVAL_SECONDS}s, limpeza diária às 03:00, reset títulos às 00:00"
     )
 
     try:
