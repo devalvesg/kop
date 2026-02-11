@@ -332,15 +332,22 @@ class MercadoLivreStore(BaseStore):
             # Imagem - tentar pegar a melhor resolução disponível
             image_url = ""
             try:
-                # 1. Tentar og:image (geralmente boa qualidade)
-                og_img = driver.find_elements(By.CSS_SELECTOR, 'meta[property="og:image"]')
-                if og_img:
-                    image_url = og_img[0].get_attribute("content") or ""
+                # 1. Tentar data-zoom da galeria (maior resolução disponível)
+                img_els = driver.find_elements(By.CSS_SELECTOR, SEL_PRODUCT_IMAGE)
+                for img_el in img_els:
+                    zoom_url = img_el.get_attribute("data-zoom") or ""
+                    if zoom_url and "mlstatic.com" in zoom_url:
+                        image_url = zoom_url
+                        break
+                    src_url = img_el.get_attribute("src") or ""
+                    if src_url and "mlstatic.com" in src_url and not image_url:
+                        image_url = src_url
 
-                # 2. Fallback: img.ui-pdp-image (data-zoom > src)
+                # 2. Fallback: og:image
                 if not image_url:
-                    image_el = driver.find_element(By.CSS_SELECTOR, SEL_PRODUCT_IMAGE)
-                    image_url = image_el.get_attribute("data-zoom") or image_el.get_attribute("src") or ""
+                    og_img = driver.find_elements(By.CSS_SELECTOR, 'meta[property="og:image"]')
+                    if og_img:
+                        image_url = og_img[0].get_attribute("content") or ""
 
                 # Remover query params de resize
                 if "?" in image_url:
@@ -349,9 +356,10 @@ class MercadoLivreStore(BaseStore):
                 # Converter para alta resolução:
                 # D_Q_NP → D_NQ_NP (sem compressão de qualidade)
                 # sufixo -R (Reduced) → -O (Original)
+                # sufixo -V (Variant) → -O (Original)
                 if "mlstatic.com" in image_url:
                     image_url = image_url.replace("/D_Q_NP_", "/D_NQ_NP_")
-                    image_url = re.sub(r"-R(\.\w+)$", r"-O\1", image_url)
+                    image_url = re.sub(r"-[RV](\.\w+)$", r"-O\1", image_url)
 
                 logger.info(f"URL da imagem: {image_url[:100]}...")
             except NoSuchElementException:
