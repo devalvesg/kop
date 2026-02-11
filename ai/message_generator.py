@@ -1,4 +1,5 @@
 import logging
+import re
 from groq import Groq
 import config
 from models.product import Product
@@ -59,17 +60,87 @@ EXEMPLO SEM DESCONTO:
 Por *R$ 45,90* à vista"""
 
 
+def _parse_price(price_str: str) -> float:
+    """Converte string de preço para float. Ex: 'R$ 1.234,56' -> 1234.56"""
+    if not price_str:
+        return 0.0
+    cleaned = re.sub(r'[^\d,.]', '', price_str)
+    # Formato BR: 1.234,56 -> remover pontos de milhar, trocar vírgula por ponto
+    if ',' in cleaned:
+        cleaned = cleaned.replace('.', '').replace(',', '.')
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
+def _has_valid_discount(product: Product) -> bool:
+    """Verifica se o desconto é real (preço original > preço atual)."""
+    if not product.original_price:
+        return False
+    original = _parse_price(product.original_price)
+    current = _parse_price(product.price)
+    return original > current > 0
+
+
+def _sanitize_message(message: str) -> str:
+    """Remove texto extra que a IA possa gerar além da estrutura definida."""
+    lines = message.split("\n")
+    clean_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # Parar se encontrar explicações/comentários da IA
+        if stripped.startswith("(") and stripped.endswith(")"):
+            break
+        if any(stripped.lower().startswith(p) for p in [
+            "parece que", "nota:", "obs:", "note:", "observação:",
+            "vamos seguir", "houve um erro", "esse texto",
+        ]):
+            break
+        clean_lines.append(line)
+    # Remover linhas vazias do final
+    while clean_lines and not clean_lines[-1].strip():
+        clean_lines.pop()
+    return "\n".join(clean_lines)
+
+
+def _format_sales_info(product: Product) -> str:
+    """Retorna info de vendas formatada apenas se relevante (>1000 vendas e rating >= 4.9)."""
+    if not product.sales_info or not product.rating:
+        return "N/A"
+    # Extrair número de vendas
+    sales_match = re.search(r'(\d[\d.]*)', product.sales_info.replace('.', ''))
+    rating_match = re.search(r'(\d+[.,]?\d*)', product.rating)
+    if not sales_match or not rating_match:
+        return "N/A"
+    try:
+        sales_num = int(sales_match.group(1))
+        rating_num = float(rating_match.group(1).replace(',', '.'))
+    except ValueError:
+        return "N/A"
+    if sales_num >= 1000 and rating_num >= 4.9:
+        return f"{product.sales_info} com {product.rating} estrelas (INCLUIR em itálico usando _texto_)"
+    return "N/A"
+
+
 def generate_message(product: Product, used_titles: list[str] | None = None) -> str:
     logger.info(f"Gerando mensagem para produto {product.mlb_id}...")
 
     client = Groq(api_key=config.GROQ_API_KEY)
 
+    # Validar desconto real
+    original_price_info = "Não informado"
+    if _has_valid_discount(product):
+        original_price_info = product.original_price
+
+    sales_info = _format_sales_info(product)
+
     user_content = f"""Crie uma mensagem promocional para este produto:
 - Nome: {product.title}
 - Preço atual: {product.price}
-- Preço original (de): {product.original_price or 'Não informado'}
-- Avaliação: {product.rating or 'N/A'}
-- Vendas: {product.sales_info or 'N/A'}"""
+- Preço original (de): {original_price_info}
+- Avaliação: {sales_info}
+- Vendas: {sales_info}"""
 
     if used_titles:
         titles_list = "\n".join(f"- {t}" for t in used_titles)
@@ -85,6 +156,7 @@ def generate_message(product: Product, used_titles: list[str] | None = None) -> 
             ],
         )
         message = response.choices[0].message.content.strip()
+        message = _sanitize_message(message)
         logger.info(f"Mensagem gerada ({len(message)} caracteres)")
         return message
     except Exception as e:
@@ -95,7 +167,5 @@ def generate_message(product: Product, used_titles: list[str] | None = None) -> 
 def extract_title(message: str) -> str:
     """Extrai a frase de abertura da mensagem gerada (primeira linha, sem emoji)."""
     first_line = message.split("\n")[0].strip()
-    # Remover emoji do início (1-2 primeiros caracteres podem ser emoji + espaço)
-    import re
     title = re.sub(r'^[\U0001F000-\U0001FFFF\u2600-\u27FF\u200d\ufe0f]+\s*', '', first_line).strip()
     return title

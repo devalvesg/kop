@@ -67,6 +67,12 @@ def scrape_and_send():
                     logger.error(f"ERRO ao gerar mensagem para {product.mlb_id} ({product.title[:50]}): {e} - produto será reprocessado no próximo ciclo")
                     continue
 
+                # Validar link de afiliado (deve conter /sec/)
+                if not product.affiliate_link or "/sec/" not in product.affiliate_link:
+                    logger.warning(f"Link de afiliado inválido para {product.mlb_id} ({product.title[:50]}): {product.affiliate_link[:80] if product.affiliate_link else 'vazio'} - pulando produto")
+                    errors += 1
+                    continue
+
                 # Enviar para canais - rastrear sucesso
                 telegram_ok = False
                 whatsapp_ok = False
