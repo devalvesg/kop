@@ -17,4 +17,5 @@ class Product:
     sales_info: str = ""
     temperature: str = ""
     source: str = ""
+    store: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())

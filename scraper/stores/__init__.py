@@ -1,8 +1,10 @@
 from scraper.stores.base_store import BaseStore
 from scraper.stores.mercadolivre import MercadoLivreStore
+from scraper.stores.amazon import AmazonStore
 
 STORE_HANDLERS: dict[str, BaseStore] = {
     "Mercado Livre": MercadoLivreStore(),
+    "Amazon": AmazonStore(),
 }
 
 

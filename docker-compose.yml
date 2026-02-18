@@ -11,8 +11,9 @@ services:
   scraper:
     build: .
     container_name: kop-scraper
-    env_file: .env
+    env_file: .env.${APP_ENV:-dev}
     environment:
+      - APP_ENV=${APP_ENV:-dev}
       - WHATSAPP_BRIDGE_URL=http://whatsapp-bridge:3001
       - HEADLESS=true
     volumes:

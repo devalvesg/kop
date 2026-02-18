@@ -24,7 +24,11 @@ sudo -u kop venv/bin/pip install -q -r requirements.txt
 echo "[DEPLOY] Verificando dependências Node..."
 sudo -u kop bash -c "cd $APP_DIR/whatsapp_bridge && npm ci --omit=dev --silent 2>/dev/null"
 
-# 4. Reiniciar APENAS o scraper (bridge mantém sessão WhatsApp ativa)
+# 4. Atualizar service files e reiniciar scraper (bridge mantém sessão WhatsApp ativa)
+echo "[DEPLOY] Atualizando service files..."
+sudo cp "$APP_DIR/deploy/kop-scraper.service" /etc/systemd/system/
+sudo systemctl daemon-reload
+
 echo "[DEPLOY] Reiniciando scraper..."
 sudo systemctl restart kop-scraper
 

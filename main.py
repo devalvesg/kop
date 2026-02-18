@@ -67,11 +67,23 @@ def scrape_and_send():
                     logger.error(f"ERRO ao gerar mensagem para {product.mlb_id} ({product.title[:50]}): {e} - produto será reprocessado no próximo ciclo")
                     continue
 
-                # Validar link de afiliado (deve conter /sec/)
-                if not product.affiliate_link or "/sec/" not in product.affiliate_link:
-                    logger.warning(f"Link de afiliado inválido para {product.mlb_id} ({product.title[:50]}): {product.affiliate_link[:80] if product.affiliate_link else 'vazio'} - pulando produto")
+                # Validar link de afiliado por loja
+                if not product.affiliate_link:
+                    logger.warning(f"Link de afiliado vazio para {product.mlb_id} ({product.title[:50]}) - pulando produto")
                     errors += 1
                     continue
+                if product.store == "amazon" and "amzn.to" not in product.affiliate_link:
+                    logger.warning(f"Link Amazon inválido para {product.mlb_id}: {product.affiliate_link[:80]} - pulando produto")
+                    errors += 1
+                    continue
+                if product.store == "mercado_livre" and "/sec/" not in product.affiliate_link:
+                    logger.warning(f"Link ML inválido para {product.mlb_id}: {product.affiliate_link[:80]} - pulando produto")
+                    errors += 1
+                    continue
+
+                # Determinar canais por loja (busca TELEGRAM_CHAT_IDS_{STORE}, fallback para default)
+                tg_ids = config.get_telegram_ids(product.store) if product.store else config.TELEGRAM_CHAT_IDS
+                wa_ids = config.get_whatsapp_ids(product.store) if product.store else config.WHATSAPP_GROUP_IDS
 
                 # Enviar para canais - rastrear sucesso
                 telegram_ok = False
@@ -82,6 +94,7 @@ def scrape_and_send():
                         message=message,
                         image_url=product.image_url,
                         affiliate_link=product.affiliate_link,
+                        chat_ids=tg_ids,
                     )
                     telegram_ok = True
                 except Exception as e:
@@ -92,6 +105,7 @@ def scrape_and_send():
                         message=message,
                         image_url=product.image_url,
                         affiliate_link=product.affiliate_link,
+                        group_ids=wa_ids,
                     )
                     whatsapp_ok = True
                 except Exception as e:

@@ -3,7 +3,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 
-load_dotenv()
+_env = os.getenv("APP_ENV", "dev")
+load_dotenv(f".env.{_env}")
 
 # Mercado Livre
 ML_EMAIL = os.getenv("ML_EMAIL", "")
@@ -46,6 +47,18 @@ os.makedirs(_data_dir, exist_ok=True)
 COOKIES_PATH = os.path.join(_data_dir, "cookies.json")
 DB_PATH = os.path.join(_data_dir, "products.db")
 LOGS_DIR = os.path.join(_base_dir, "logs")
+
+
+def get_telegram_ids(store: str) -> list[str]:
+    """Retorna chat IDs do Telegram por loja. Padrão: TELEGRAM_CHAT_IDS_{STORE_UPPER}. Fallback: TELEGRAM_CHAT_IDS."""
+    store_ids = [cid.strip() for cid in os.getenv(f"TELEGRAM_CHAT_IDS_{store.upper()}", "").split(",") if cid.strip()]
+    return store_ids or TELEGRAM_CHAT_IDS
+
+
+def get_whatsapp_ids(store: str) -> list[str]:
+    """Retorna group IDs do WhatsApp por loja. Padrão: WHATSAPP_GROUP_IDS_{STORE_UPPER}. Fallback: WHATSAPP_GROUP_IDS."""
+    store_ids = [gid.strip() for gid in os.getenv(f"WHATSAPP_GROUP_IDS_{store.upper()}", "").split(",") if gid.strip()]
+    return store_ids or WHATSAPP_GROUP_IDS
 
 
 def setup_logging():

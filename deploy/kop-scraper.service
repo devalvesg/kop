@@ -8,7 +8,8 @@ Type=simple
 User=kop
 Group=kop
 WorkingDirectory=/opt/kop-ml
-EnvironmentFile=/opt/kop-ml/.env
+EnvironmentFile=/opt/kop-ml/.env.prod
+Environment=APP_ENV=prod
 Environment=HEADLESS=true
 Environment=CHROME_BINARY=/usr/bin/chromium-browser
 Environment=CHROMEDRIVER_PATH=/usr/bin/chromedriver

@@ -181,6 +181,7 @@ class MercadoLivreStore(BaseStore):
                 sales_info=product_data.get("sales_info", ""),
                 temperature=deal.temperature,
                 source="pelando",
+                store="mercado_livre",
             )
 
             logger.info(f"Produto extraído: {product.title[:50]} - {product.price}")

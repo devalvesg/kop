@@ -17,10 +17,11 @@ def _is_bridge_connected() -> bool:
         return False
 
 
-def send_message(message: str, image_url: str = "", affiliate_link: str = ""):
-    if not config.WHATSAPP_GROUP_IDS:
-        logger.warning("WHATSAPP_GROUP_IDS vazio, pulando envio")
-        raise RuntimeError("WHATSAPP_GROUP_IDS vazio")
+def send_message(message: str, image_url: str = "", affiliate_link: str = "", group_ids: list[str] | None = None):
+    target_ids = group_ids or config.WHATSAPP_GROUP_IDS
+    if not target_ids:
+        logger.warning("Nenhum group ID configurado, pulando envio")
+        raise RuntimeError("Nenhum group ID configurado")
 
     if not _is_bridge_connected():
         logger.warning("WhatsApp bridge desconectado, pulando envio")
@@ -28,11 +29,10 @@ def send_message(message: str, image_url: str = "", affiliate_link: str = ""):
 
     full_message = f"{message}\n\n🔗 {affiliate_link}" if affiliate_link else message
 
-
-    logger.info(f"Enviando para {len(config.WHATSAPP_GROUP_IDS)} grupos...")
+    logger.info(f"Enviando para {len(target_ids)} grupos...")
 
     errors = []
-    for group_id in config.WHATSAPP_GROUP_IDS:
+    for group_id in target_ids:
         try:
             payload = {
                 "chatId": group_id,
@@ -56,5 +56,5 @@ def send_message(message: str, image_url: str = "", affiliate_link: str = ""):
             logger.error(f"ERRO ao enviar para {group_id}: {e}")
             errors.append(str(e))
 
-    if len(errors) == len(config.WHATSAPP_GROUP_IDS):
+    if len(errors) == len(target_ids):
         raise RuntimeError(f"Falha em todos os grupos WhatsApp: {'; '.join(errors)}")
