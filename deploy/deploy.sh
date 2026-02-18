@@ -11,10 +11,11 @@ cd "$APP_DIR"
 
 echo "[DEPLOY] Iniciando deploy..."
 
-# 1. Pull do código (como user kop, dono do repo)
+# 1. Atualizar código (force reset para garantir sincronia com remote)
 echo "[DEPLOY] Atualizando código..."
 sudo -u kop git config --global --add safe.directory "$APP_DIR"
-sudo -u kop git pull origin main
+sudo -u kop git fetch origin main
+sudo -u kop git reset --hard origin/main
 
 # 2. Atualizar dependências Python
 echo "[DEPLOY] Verificando dependências Python..."
