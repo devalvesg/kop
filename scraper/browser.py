@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import platform
 import time
 from selenium import webdriver
@@ -58,44 +59,43 @@ def _build_options(headless: bool = False, use_xvfb: bool = False) -> Options:
     return options
 
 
-def _save_cookies(driver: webdriver.Chrome):
+def _cookies_path(store_name: str) -> str:
+    """Retorna o caminho do arquivo de cookies para uma loja."""
+    return os.path.join(config._data_dir, f"cookies_{store_name}.json")
+
+
+def save_store_cookies(driver: webdriver.Chrome, store_name: str):
+    """Salva cookies do browser para uma loja específica."""
+    path = _cookies_path(store_name)
     cookies = driver.get_cookies()
-    with open(config.COOKIES_PATH, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(cookies, f)
-    logger.info(f"Cookies salvos em {config.COOKIES_PATH}")
+    logger.info(f"Cookies salvos para {store_name} ({len(cookies)} cookies)")
 
 
-def _load_cookies(driver: webdriver.Chrome) -> bool:
+def load_store_cookies(driver: webdriver.Chrome, store_name: str, domain_url: str) -> bool:
+    """Carrega cookies de uma loja. Navega para o domínio antes de adicionar."""
+    path = _cookies_path(store_name)
     try:
-        with open(config.COOKIES_PATH, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             cookies = json.load(f)
-        driver.get(config.ML_LOGIN_URL)
+        driver.get(domain_url)
+        time.sleep(1)
         for cookie in cookies:
             cookie.pop("sameSite", None)
             try:
                 driver.add_cookie(cookie)
             except Exception:
                 pass
-        logger.info("Cookies carregados de cookies.json")
+        logger.info(f"Cookies carregados para {store_name} ({len(cookies)} cookies)")
         return True
     except FileNotFoundError:
-        logger.info("Arquivo cookies.json não encontrado")
+        logger.info(f"Sem cookies salvos para {store_name}")
         return False
 
 
-def _is_logged_in(driver: webdriver.Chrome) -> bool:
-    driver.get(config.ML_HUB_URL)
-    time.sleep(3)
-    current_url = driver.current_url
-    logged_in = "login" not in current_url and "afiliados" in current_url
-    if logged_in:
-        logger.info("Sessão válida, navegando para hub de afiliados")
-    else:
-        logger.warning(f"Sessão inválida, redirecionado para: {current_url}")
-    return logged_in
-
-
 def get_driver() -> webdriver.Chrome:
+    """Cria e retorna o WebDriver. Não faz login em nenhuma loja."""
     logger.info(f"Iniciando Chrome WebDriver (headless={config.HEADLESS})...")
 
     use_xvfb = False
@@ -111,23 +111,5 @@ def get_driver() -> webdriver.Chrome:
         {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
     )
 
-    if _load_cookies(driver) and _is_logged_in(driver):
-        return driver
-
-    logger.warning("Sessão expirada ou primeiro login. Faça login manualmente no navegador.")
-    driver.get("https://www.mercadolivre.com.br/navigation/login")
-
-    print("\n" + "=" * 60)
-    print("FAÇA LOGIN NO MERCADO LIVRE NO NAVEGADOR QUE ABRIU")
-    print("Após fazer login, pressione ENTER aqui no terminal...")
-    print("=" * 60 + "\n")
-    input()
-
-    _save_cookies(driver)
-
-    if _is_logged_in(driver):
-        return driver
-
-    logger.error("Falha no login. Verifique suas credenciais.")
-    driver.quit()
-    raise RuntimeError("Não foi possível autenticar no Mercado Livre")
+    logger.info("WebDriver criado com sucesso")
+    return driver

@@ -10,7 +10,6 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from scraper.stores.base_store import BaseStore
 from models.pelando_deal import PelandoDeal
 from models.product import Product
-import config
 
 logger = logging.getLogger("ML_STORE")
 
@@ -43,6 +42,8 @@ SEL_AFFILIATE_MODAL = "div.andes-modal__content"
 class MercadoLivreStore(BaseStore):
     name = "mercado_livre"
     display_name = "Mercado Livre"
+    domain_url = "https://www.mercadolivre.com.br"
+    login_url = "https://www.mercadolivre.com.br/navigation/login"
 
     def process_deal(self, driver, deal: PelandoDeal) -> Product | None:
         """
@@ -538,7 +539,7 @@ class MercadoLivreStore(BaseStore):
     def is_logged_in(self, driver) -> bool:
         """Verifica se está logado no programa de afiliados do ML."""
         try:
-            driver.get(config.ML_HUB_URL)
+            driver.get("https://www.mercadolivre.com.br/afiliados/hub")
             time.sleep(3)
             current_url = driver.current_url
             return "login" not in current_url and "afiliados" in current_url
@@ -548,10 +549,10 @@ class MercadoLivreStore(BaseStore):
     def login(self, driver) -> bool:
         """Realiza login no ML (redireciona para login manual)."""
         try:
-            driver.get("https://www.mercadolivre.com.br/navigation/login")
+            driver.get(self.login_url)
             print("\n" + "=" * 60)
-            print("FAÇA LOGIN NO MERCADO LIVRE NO NAVEGADOR")
-            print("Após fazer login, pressione ENTER aqui...")
+            print("FAÇA LOGIN NO MERCADO LIVRE NO NAVEGADOR QUE ABRIU")
+            print("Após fazer login, pressione ENTER aqui no terminal...")
             print("=" * 60 + "\n")
             input()
             return self.is_logged_in(driver)

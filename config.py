@@ -36,15 +36,12 @@ CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "")  # Ex: /usr/bin/chromedri
 
 # URLs
 PELANDO_URL = "https://www.pelando.com.br/"
-ML_HUB_URL = "https://www.mercadolivre.com.br/afiliados/hub"
-ML_LOGIN_URL = "https://www.mercadolivre.com.br"
 
 # Paths - em Docker usa /app/data, localmente usa diretório do projeto
 _base_dir = os.path.dirname(__file__)
 _data_dir = os.path.join(_base_dir, "data") if HEADLESS else _base_dir
 os.makedirs(_data_dir, exist_ok=True)
 
-COOKIES_PATH = os.path.join(_data_dir, "cookies.json")
 DB_PATH = os.path.join(_data_dir, "products.db")
 LOGS_DIR = os.path.join(_base_dir, "logs")
 

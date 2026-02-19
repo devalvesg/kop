@@ -208,10 +208,15 @@ def get_deals(driver, store_filter: str | None = None) -> list[PelandoDeal]:
     return deals
 
 
-def scrape_pelando(driver) -> list:
+def scrape_pelando(driver, logged_in_stores: set[str] | None = None) -> list:
     """
     Scrape principal do Pelando.
     Extrai deals e processa usando o handler de cada loja.
+
+    Args:
+        driver: WebDriver do Selenium
+        logged_in_stores: Set de store names com sessão ativa.
+                          Se None, processa todas as lojas.
 
     Returns:
         Lista de Products processados
@@ -244,6 +249,11 @@ def scrape_pelando(driver) -> list:
             handler = get_handler(deal.store_name)
             if not handler:
                 logger.warning(f"Sem handler para loja: {deal.store_name}")
+                continue
+
+            # Pular lojas sem sessão ativa
+            if logged_in_stores is not None and handler.name not in logged_in_stores:
+                logger.debug(f"Loja {handler.display_name} sem sessão ativa, pulando deal: {deal.title[:40]}")
                 continue
 
             logger.info(f"Processando deal via {handler.display_name}: {deal.title[:40]}...")

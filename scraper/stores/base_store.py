@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 class BaseStore(ABC):
     name: str
     display_name: str
+    domain_url: str  # URL base do domínio (para carregar cookies)
+    login_url: str  # URL para login manual
 
     @abstractmethod
     def process_deal(self, driver: "WebDriver", deal: "PelandoDeal") -> "Product | None":

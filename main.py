@@ -5,8 +5,9 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 import config
 from database import db
-from scraper.browser import get_driver, stop_virtual_display
+from scraper.browser import get_driver, stop_virtual_display, load_store_cookies, save_store_cookies
 from scraper.pelando_scraper import scrape_pelando
+from scraper.stores import STORE_HANDLERS
 from ai.message_generator import generate_message, extract_title
 from messaging import telegram_sender, whatsapp_sender
 
@@ -15,6 +16,42 @@ logger = logging.getLogger("MAIN")
 driver = None
 scheduler = None
 _shutting_down = False
+_logged_in_stores: set[str] = set()  # Lojas com sessão ativa
+
+
+def ensure_store_logins(drv):
+    """Verifica login em todas as lojas. Carrega cookies e faz login manual se necessário."""
+    global _logged_in_stores
+    _logged_in_stores.clear()
+
+    for store_name, handler in STORE_HANDLERS.items():
+        logger.info(f"Verificando login para {handler.display_name}...")
+
+        # 1. Carregar cookies salvos
+        load_store_cookies(drv, handler.name, handler.domain_url)
+
+        # 2. Verificar se está logado
+        if handler.is_logged_in(drv):
+            logger.info(f"{handler.display_name}: sessão ativa")
+            _logged_in_stores.add(handler.name)
+            continue
+
+        # 3. Se headless, não pode fazer login interativo
+        if config.HEADLESS:
+            logger.warning(
+                f"{handler.display_name}: sem sessão válida (headless, não é possível login interativo). "
+                f"Deals desta loja serão ignorados até ter cookies válidos."
+            )
+            continue
+
+        # 4. Login manual (modo local)
+        logger.info(f"{handler.display_name}: sessão expirada, iniciando login manual...")
+        if handler.login(drv):
+            save_store_cookies(drv, handler.name)
+            _logged_in_stores.add(handler.name)
+            logger.info(f"{handler.display_name}: login realizado e cookies salvos")
+        else:
+            logger.error(f"{handler.display_name}: falha no login")
 
 
 def _ensure_driver():
@@ -29,6 +66,7 @@ def _ensure_driver():
         except Exception:
             pass
         driver = get_driver()
+        ensure_store_logins(driver)
         logger.info("WebDriver recriado com sucesso")
 
 
@@ -40,7 +78,7 @@ def scrape_and_send():
 
     try:
         _ensure_driver()
-        products = scrape_pelando(driver)
+        products = scrape_pelando(driver, _logged_in_stores)
 
         if not products:
             logger.info("Nenhum produto novo encontrado neste ciclo")
@@ -168,8 +206,9 @@ def main():
     # Inicializar banco
     db.init_db()
 
-    # Inicializar browser
+    # Inicializar browser e verificar logins
     driver = get_driver()
+    ensure_store_logins(driver)
 
     # Registrar signal handlers para graceful shutdown
     signal.signal(signal.SIGINT, shutdown)

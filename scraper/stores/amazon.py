@@ -29,6 +29,8 @@ SEL_COUPON_BADGE = "#couponBadgeRegularVpc"
 class AmazonStore(BaseStore):
     name = "amazon"
     display_name = "Amazon"
+    domain_url = "https://www.amazon.com.br"
+    login_url = "https://associados.amazon.com.br"
 
     def process_deal(self, driver, deal: PelandoDeal) -> Product | None:
         """
@@ -149,8 +151,7 @@ class AmazonStore(BaseStore):
 
     def login(self, driver) -> bool:
         """Login manual no Amazon Associates."""
-        logger.warning("Faça login no Amazon Associates no navegador.")
-        driver.get("https://affiliate-program.amazon.com.br")
+        driver.get(self.login_url)
         time.sleep(2)
 
         print("\n" + "=" * 60)
