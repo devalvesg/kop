@@ -1,5 +1,6 @@
 import logging
 import re
+from collections import Counter
 from groq import Groq
 import config
 from models.product import Product
@@ -104,6 +105,20 @@ def _sanitize_message(message: str) -> str:
     return "\n".join(clean_lines)
 
 
+def _is_garbled(message: str) -> bool:
+    """Detecta output com repetição colapsada (ex: 'Page Page Page...')."""
+    words = re.findall(r'\b\w+\b', message)
+    if len(words) < 5:
+        return False
+    ignore = {"r$", "de", "a", "o", "e", "por", "na", "no", "com", "à", "as", "os", "um", "uma"}
+    counts = Counter(w.lower() for w in words)
+    for word, count in counts.most_common(5):
+        if word not in ignore and count > 4:
+            logger.warning(f"Output suspeito: palavra '{word}' aparece {count}x")
+            return True
+    return False
+
+
 def _format_sales_info(product: Product) -> str:
     """Retorna info de vendas formatada apenas se relevante (>1000 vendas e rating >= 4.9)."""
     if not product.sales_info or not product.rating:
@@ -146,22 +161,31 @@ def generate_message(product: Product, used_titles: list[str] | None = None) -> 
         titles_list = "\n".join(f"- {t}" for t in used_titles)
         user_content += f"\n\nFrases de abertura já utilizadas hoje (NÃO repita nenhuma delas, crie algo DIFERENTE):\n{titles_list}"
 
-    try:
-        response = client.chat.completions.create(
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",
-            max_tokens=300,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-        )
-        message = response.choices[0].message.content.strip()
-        message = _sanitize_message(message)
-        logger.info(f"Mensagem gerada ({len(message)} caracteres)")
-        return message
-    except Exception as e:
-        logger.error(f"ERRO na geração para {product.mlb_id} ({product.title[:50]}): {e}")
-        raise
+    max_retries = 3
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                max_tokens=300,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+            )
+            message = response.choices[0].message.content.strip()
+            if _is_garbled(message):
+                logger.warning(f"Output inválido na tentativa {attempt}/{max_retries}, retentando...")
+                last_error = Exception("Output com repetição colapsada")
+                continue
+            message = _sanitize_message(message)
+            logger.info(f"Mensagem gerada ({len(message)} caracteres)")
+            return message
+        except Exception as e:
+            logger.error(f"ERRO na geração para {product.mlb_id} ({product.title[:50]}) tentativa {attempt}/{max_retries}: {e}")
+            last_error = e
+
+    raise last_error or Exception("Falha ao gerar mensagem após todas as tentativas")
 
 
 def extract_title(message: str) -> str:
