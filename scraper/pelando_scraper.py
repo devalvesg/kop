@@ -46,9 +46,12 @@ def _is_expired(card) -> bool:
         return False
 
 
-def _is_coupon(title: str) -> bool:
-    """Verifica se o deal é um cupom (não queremos cupons)."""
-    return "cupom" in title.lower()
+def _is_coupon_only(title: str) -> bool:
+    """Verifica se o deal é APENAS um cupom sem produto (ex: 'Cupom 10% OFF na loja X').
+    Deals com [CUPOM] no título são produtos normais que têm cupom de desconto, não filtrar."""
+    title_lower = title.lower().strip()
+    # Filtrar apenas se o título COMEÇA com "cupom" (é um deal de cupom puro, sem produto)
+    return title_lower.startswith("cupom")
 
 
 def _extract_deal_data(card) -> PelandoDeal | None:
@@ -68,9 +71,9 @@ def _extract_deal_data(card) -> PelandoDeal | None:
             logger.debug("Card sem título, pulando")
             return None
 
-        # Verificar se é cupom
-        if _is_coupon(title):
-            logger.debug(f"Deal é cupom, pulando: {title[:40]}")
+        # Verificar se é cupom puro (título começa com "cupom")
+        if _is_coupon_only(title):
+            logger.debug(f"Deal é cupom puro, pulando: {title[:40]}")
             return None
 
         # Preço
