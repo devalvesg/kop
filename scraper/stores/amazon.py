@@ -188,7 +188,14 @@ class AmazonStore(BaseStore):
                 return short_link if short_link else ""
 
         except TimeoutException:
-            logger.error("Timeout ao gerar link de afiliado Amazon")
+            screenshot_path = "/tmp/amazon_sitestripe_timeout.png"
+            try:
+                driver.save_screenshot(screenshot_path)
+                logger.error(f"Timeout ao gerar link de afiliado Amazon. Screenshot salvo em {screenshot_path}")
+                logger.error(f"URL no timeout: {driver.current_url}")
+                logger.error(f"Page source (primeiros 1000 chars): {driver.page_source[:1000]}")
+            except Exception as ss_err:
+                logger.error(f"Timeout ao gerar link de afiliado Amazon (falha ao salvar screenshot: {ss_err})")
             return ""
         except Exception as e:
             logger.error(f"Erro ao gerar link de afiliado Amazon: {e}")
