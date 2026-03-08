@@ -207,9 +207,9 @@ class AmazonStore(BaseStore):
                 except Exception as ss_err:
                     logger.error(f"Timeout ao gerar link de afiliado Amazon (falha ao salvar screenshot: {ss_err})")
                 return ""
-        except Exception as e:
-            logger.error(f"Erro ao gerar link de afiliado Amazon: {e}")
-            return ""
+            except Exception as e:
+                logger.error(f"Erro ao gerar link de afiliado Amazon: {e}")
+                return ""
 
     def _extract_product_data(self, driver, url: str) -> dict | None:
         """Extrai dados do produto da página da Amazon."""
