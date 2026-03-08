@@ -30,6 +30,7 @@ WHATSAPP_GROUP_IDS = [
 
 # Scraper
 SCRAPE_INTERVAL_SECONDS = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "60"))
+AMAZON_AFFILIATE_TAG = os.getenv("AMAZON_AFFILIATE_TAG", "kop057-20")
 HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
 CHROME_BINARY = os.getenv("CHROME_BINARY", "")  # Ex: /usr/bin/chromium-browser
 CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "")  # Ex: /usr/bin/chromedriver
