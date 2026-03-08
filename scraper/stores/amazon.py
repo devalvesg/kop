@@ -175,7 +175,9 @@ class AmazonStore(BaseStore):
                 get_link_btn = WebDriverWait(driver, timeout_btn).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, SEL_GET_LINK_BTN))
                 )
-                driver.execute_script("arguments[0].click();", get_link_btn)
+                driver.execute_script("arguments[0].scrollIntoView(true);", get_link_btn)
+                time.sleep(0.5)
+                get_link_btn.click()
                 logger.info(f"Clicou em 'Obter Link' (tentativa {attempt})")
                 time.sleep(2)
 
