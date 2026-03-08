@@ -9,7 +9,6 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from scraper.stores.base_store import BaseStore
 from models.pelando_deal import PelandoDeal
 from models.product import Product
-from config import AMAZON_AFFILIATE_TAG
 
 logger = logging.getLogger("AMAZON_STORE")
 
@@ -164,16 +163,45 @@ class AmazonStore(BaseStore):
         return self.is_logged_in(driver)
 
     def _generate_affiliate_link(self, driver) -> str:
-        """Constrói link de afiliado diretamente a partir do ASIN + tag."""
+        """Clica em 'Obter Link' e extrai o short link do popover SiteStripe."""
         try:
-            current_url = driver.current_url
-            asin = self._extract_asin(current_url)
-            if not asin:
-                logger.error(f"Não foi possível extrair ASIN da URL: {current_url}")
-                return ""
-            affiliate_link = f"https://www.amazon.com.br/dp/{asin}?tag={AMAZON_AFFILIATE_TAG}"
-            logger.info(f"Link de afiliado gerado: {affiliate_link}")
-            return affiliate_link
+            driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)
+
+            # Clicar no botão "Obter Link" (abre o popover)
+            get_link_btn = WebDriverWait(driver, 15).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, SEL_GET_LINK_BTN))
+            )
+            get_link_btn.click()
+            logger.info("Clicou em 'Obter Link'")
+            time.sleep(2)
+
+            # Aguardar o textarea FICAR VISÍVEL no popover (não apenas existir no DOM)
+            textarea = WebDriverWait(driver, 20).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, SEL_SHORT_LINK_TEXTAREA))
+            )
+            short_link = textarea.get_attribute("value") or textarea.text
+            short_link = short_link.strip()
+
+            if short_link:
+                logger.info(f"Link de afiliado gerado: {short_link}")
+                return short_link
+
+            logger.warning(f"Textarea visível mas vazio")
+            return ""
+
+        except TimeoutException:
+            screenshot_path = "/tmp/amazon_sitestripe_timeout.png"
+            try:
+                driver.save_screenshot(screenshot_path)
+                logger.error(f"Timeout ao gerar link. Screenshot: {screenshot_path}")
+                logger.error(f"URL no timeout: {driver.current_url}")
+                console_logs = driver.get_log("browser")
+                for entry in console_logs[-10:]:
+                    logger.error(f"Console: {entry}")
+            except Exception as ss_err:
+                logger.error(f"Timeout ao gerar link (falha no debug: {ss_err})")
+            return ""
         except Exception as e:
             logger.error(f"Erro ao gerar link de afiliado Amazon: {e}")
             return ""
