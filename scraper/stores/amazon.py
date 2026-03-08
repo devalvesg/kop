@@ -164,39 +164,49 @@ class AmazonStore(BaseStore):
 
     def _generate_affiliate_link(self, driver) -> str:
         """Clica em 'Obter Link' e extrai o short link do textarea."""
-        try:
-            # Clicar no botão "Obter Link"
-            get_link_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, SEL_GET_LINK_BTN))
-            )
-            get_link_btn.click()
-            logger.info("Clicou em 'Obter Link'")
-            time.sleep(2)
-
-            # Extrair link do textarea
-            textarea = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, SEL_SHORT_LINK_TEXTAREA))
-            )
-            short_link = textarea.get_attribute("value") or textarea.text
-            short_link = short_link.strip()
-
-            if short_link and "amzn.to" in short_link:
-                logger.info(f"Link de afiliado gerado: {short_link}")
-                return short_link
-            else:
-                logger.warning(f"Link inesperado no textarea: {short_link}")
-                return short_link if short_link else ""
-
-        except TimeoutException:
-            screenshot_path = "/tmp/amazon_sitestripe_timeout.png"
+        for attempt in range(1, 3):
             try:
-                driver.save_screenshot(screenshot_path)
-                logger.error(f"Timeout ao gerar link de afiliado Amazon. Screenshot salvo em {screenshot_path}")
-                logger.error(f"URL no timeout: {driver.current_url}")
-                logger.error(f"Page source (primeiros 1000 chars): {driver.page_source[:1000]}")
-            except Exception as ss_err:
-                logger.error(f"Timeout ao gerar link de afiliado Amazon (falha ao salvar screenshot: {ss_err})")
-            return ""
+                # Rolar para o topo para garantir que o SiteStripe está visível
+                driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(1)
+
+                # Clicar no botão "Obter Link"
+                timeout_btn = 15 + (attempt - 1) * 10
+                get_link_btn = WebDriverWait(driver, timeout_btn).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, SEL_GET_LINK_BTN))
+                )
+                driver.execute_script("arguments[0].click();", get_link_btn)
+                logger.info(f"Clicou em 'Obter Link' (tentativa {attempt})")
+                time.sleep(2)
+
+                # Extrair link do textarea
+                timeout_textarea = 25 + (attempt - 1) * 10
+                textarea = WebDriverWait(driver, timeout_textarea).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, SEL_SHORT_LINK_TEXTAREA))
+                )
+                short_link = textarea.get_attribute("value") or textarea.text
+                short_link = short_link.strip()
+
+                if short_link and "amzn.to" in short_link:
+                    logger.info(f"Link de afiliado gerado: {short_link}")
+                    return short_link
+                else:
+                    logger.warning(f"Link inesperado no textarea: {short_link}")
+                    return short_link if short_link else ""
+
+            except TimeoutException:
+                if attempt < 2:
+                    logger.warning(f"Timeout na tentativa {attempt}, tentando novamente com +10s...")
+                    continue
+                screenshot_path = "/tmp/amazon_sitestripe_timeout.png"
+                try:
+                    driver.save_screenshot(screenshot_path)
+                    logger.error(f"Timeout ao gerar link de afiliado Amazon. Screenshot salvo em {screenshot_path}")
+                    logger.error(f"URL no timeout: {driver.current_url}")
+                    logger.error(f"Page source (primeiros 1000 chars): {driver.page_source[:1000]}")
+                except Exception as ss_err:
+                    logger.error(f"Timeout ao gerar link de afiliado Amazon (falha ao salvar screenshot: {ss_err})")
+                return ""
         except Exception as e:
             logger.error(f"Erro ao gerar link de afiliado Amazon: {e}")
             return ""
