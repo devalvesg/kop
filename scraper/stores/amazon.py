@@ -9,6 +9,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from scraper.stores.base_store import BaseStore
 from models.pelando_deal import PelandoDeal
 from models.product import Product
+from config import AMAZON_AFFILIATE_TAG
 
 logger = logging.getLogger("AMAZON_STORE")
 
@@ -163,50 +164,16 @@ class AmazonStore(BaseStore):
         return self.is_logged_in(driver)
 
     def _generate_affiliate_link(self, driver) -> str:
-        """Clica em 'Obter Link' e lê o short link via JS (bypassa visibilidade do popover)."""
+        """Substitui a tag de afiliado na URL atual pela tag própria."""
         try:
-            driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)
-
-            # Clicar no botão "Obter Link" (dispara geração do link)
-            get_link_btn = WebDriverWait(driver, 15).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, SEL_GET_LINK_BTN))
-            )
-            get_link_btn.click()
-            logger.info("Clicou em 'Obter Link'")
-
-            # Aguardar link ser preenchido no textarea via JS (independe de visibilidade)
-            short_link = ""
-            for _ in range(10):
-                time.sleep(2)
-                short_link = driver.execute_script("""
-                    var els = document.querySelectorAll('#amzn-ss-text-shortlink-textarea');
-                    for (var el of els) {
-                        var v = (el.value || el.textContent || '').trim();
-                        if (v) return v;
-                    }
-                    return '';
-                """)
-                if short_link:
-                    break
-
-            if short_link:
-                logger.info(f"Link de afiliado gerado: {short_link}")
-                return short_link
-
-            logger.warning("Textarea encontrado mas permanece vazio após 20s")
-            driver.save_screenshot("/tmp/amazon_sitestripe_timeout.png")
-            return ""
-
-        except TimeoutException:
-            screenshot_path = "/tmp/amazon_sitestripe_timeout.png"
-            try:
-                driver.save_screenshot(screenshot_path)
-                logger.error(f"Timeout ao localizar botão SiteStripe. Screenshot: {screenshot_path}")
-                logger.error(f"URL no timeout: {driver.current_url}")
-            except Exception as ss_err:
-                logger.error(f"Timeout (falha no debug: {ss_err})")
-            return ""
+            current_url = driver.current_url
+            affiliate_link = re.sub(r"tag=[^&]+", f"tag={AMAZON_AFFILIATE_TAG}", current_url)
+            # Garante que a tag está presente mesmo se a URL não tinha nenhuma
+            if f"tag={AMAZON_AFFILIATE_TAG}" not in affiliate_link:
+                sep = "&" if "?" in affiliate_link else "?"
+                affiliate_link = f"{affiliate_link}{sep}tag={AMAZON_AFFILIATE_TAG}"
+            logger.info(f"Link de afiliado gerado: {affiliate_link}")
+            return affiliate_link
         except Exception as e:
             logger.error(f"Erro ao gerar link de afiliado Amazon: {e}")
             return ""
