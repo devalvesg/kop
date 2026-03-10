@@ -110,7 +110,7 @@ def scrape_and_send():
                     logger.warning(f"Link de afiliado vazio para {product.mlb_id} ({product.title[:50]}) - pulando produto")
                     errors += 1
                     continue
-                if product.store == "amazon" and "amzn.to" not in product.affiliate_link:
+                if product.store == "amazon" and "amzn.to" not in product.affiliate_link and "amazon.com.br" not in product.affiliate_link:
                     logger.warning(f"Link Amazon inválido para {product.mlb_id}: {product.affiliate_link[:80]} - pulando produto")
                     errors += 1
                     continue
