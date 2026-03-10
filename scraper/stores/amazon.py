@@ -179,9 +179,14 @@ class AmazonStore(BaseStore):
             short_link = ""
             for _ in range(10):
                 time.sleep(2)
-                short_link = driver.execute_script(
-                    "return document.querySelector('#amzn-ss-text-shortlink-textarea')?.value?.trim() || '';"
-                )
+                short_link = driver.execute_script("""
+                    var els = document.querySelectorAll('#amzn-ss-text-shortlink-textarea');
+                    for (var el of els) {
+                        var v = (el.value || el.textContent || '').trim();
+                        if (v) return v;
+                    }
+                    return '';
+                """)
                 if short_link:
                     break
 
