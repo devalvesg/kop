@@ -164,14 +164,13 @@ class AmazonStore(BaseStore):
         return self.is_logged_in(driver)
 
     def _generate_affiliate_link(self, driver) -> str:
-        """Substitui a tag de afiliado na URL atual pela tag própria."""
+        """Constrói link limpo de afiliado a partir do ASIN + tag."""
         try:
-            current_url = driver.current_url
-            affiliate_link = re.sub(r"tag=[^&]+", f"tag={AMAZON_AFFILIATE_TAG}", current_url)
-            # Garante que a tag está presente mesmo se a URL não tinha nenhuma
-            if f"tag={AMAZON_AFFILIATE_TAG}" not in affiliate_link:
-                sep = "&" if "?" in affiliate_link else "?"
-                affiliate_link = f"{affiliate_link}{sep}tag={AMAZON_AFFILIATE_TAG}"
+            asin = self._extract_asin(driver.current_url)
+            if not asin:
+                logger.error(f"ASIN não encontrado na URL: {driver.current_url}")
+                return ""
+            affiliate_link = f"https://www.amazon.com.br/dp/{asin}?tag={AMAZON_AFFILIATE_TAG}"
             logger.info(f"Link de afiliado gerado: {affiliate_link}")
             return affiliate_link
         except Exception as e:
