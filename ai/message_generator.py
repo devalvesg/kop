@@ -166,7 +166,7 @@ def generate_message(product: Product, used_titles: list[str] | None = None) -> 
     for attempt in range(1, max_retries + 1):
         try:
             response = client.chat.completions.create(
-                model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                model="llama-3.3-70b-versatile",
                 max_tokens=300,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
