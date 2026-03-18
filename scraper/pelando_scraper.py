@@ -156,7 +156,14 @@ def get_deals(driver, store_filter: str | None = None) -> list[PelandoDeal]:
             EC.presence_of_element_located((By.CSS_SELECTOR, SEL_DEAL_CARD))
         )
     except TimeoutException:
-        logger.error("Timeout ao carregar cards do Pelando")
+        screenshot_path = "/tmp/pelando_timeout.png"
+        try:
+            driver.save_screenshot(screenshot_path)
+            logger.error(f"Timeout ao carregar cards do Pelando. URL: {driver.current_url}")
+            logger.error(f"Screenshot: {screenshot_path}")
+            logger.error(f"Page source (500 chars): {driver.page_source[:500]}")
+        except Exception:
+            logger.error("Timeout ao carregar cards do Pelando")
         return []
 
     deals = []
