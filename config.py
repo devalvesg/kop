@@ -36,7 +36,7 @@ CHROME_BINARY = os.getenv("CHROME_BINARY", "")  # Ex: /usr/bin/chromium-browser
 CHROMEDRIVER_PATH = os.getenv("CHROMEDRIVER_PATH", "")  # Ex: /usr/bin/chromedriver
 
 # URLs
-PELANDO_URL = "https://www.pelando.com.br/"
+PELANDO_URL = "https://www.pelando.com.br/recentes"
 
 # Paths - em Docker usa /app/data, localmente usa diretório do projeto
 _base_dir = os.path.dirname(__file__)

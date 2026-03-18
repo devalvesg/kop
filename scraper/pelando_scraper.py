@@ -12,7 +12,6 @@ import config
 logger = logging.getLogger("PELANDO")
 
 # Seletores CSS do Pelando
-SEL_FILTER_RECENTS = "a#FEED_RECENTS"  # Filtro "Recentes" na página inicial
 # O card principal tem data-show-author (true ou false)
 SEL_DEAL_CARD = "div[data-show-author]"
 SEL_CARD_TITLE = "h3[class*='title'] a"
@@ -146,21 +145,10 @@ def get_deals(driver, store_filter: str | None = None) -> list[PelandoDeal]:
     Returns:
         Lista de PelandoDeal (máximo MAX_DEALS_TO_PROCESS)
     """
-    logger.info("Navegando para Pelando...")
+    logger.info("Navegando para Pelando (Recentes)...")
 
     driver.get(config.PELANDO_URL)
     time.sleep(3)
-
-    # Clicar no filtro "Recentes" para ver promoções mais recentes
-    try:
-        recents_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, SEL_FILTER_RECENTS))
-        )
-        recents_btn.click()
-        logger.info("Clicou no filtro 'Recentes'")
-        time.sleep(2)
-    except TimeoutException:
-        logger.warning("Filtro 'Recentes' não encontrado, continuando na página atual")
 
     # Aguardar cards carregarem
     try:
