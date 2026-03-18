@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import time
 import undetected_chromedriver as uc
 import config
@@ -54,11 +55,19 @@ def get_driver() -> uc.Chrome:
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
 
+    # Copia o chromedriver para diretório gravável para o undetected_chromedriver poder patchear
+    driver_src = config.CHROMEDRIVER_PATH or shutil.which("chromedriver") or "/usr/bin/chromedriver"
+    driver_dst = "/tmp/chromedriver_uc"
+    if not os.path.exists(driver_dst) or os.path.getmtime(driver_src) > os.path.getmtime(driver_dst):
+        shutil.copy2(driver_src, driver_dst)
+        os.chmod(driver_dst, 0o755)
+        logger.info(f"Chromedriver copiado para {driver_dst}")
+
     driver = uc.Chrome(
         options=options,
         headless=config.HEADLESS,
         use_subprocess=True,
-        driver_executable_path=config.CHROMEDRIVER_PATH or None,
+        driver_executable_path=driver_dst,
     )
 
     logger.info("WebDriver criado com sucesso")
