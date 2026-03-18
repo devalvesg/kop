@@ -148,23 +148,31 @@ def get_deals(driver, store_filter: str | None = None) -> list[PelandoDeal]:
     logger.info("Navegando para Pelando (Recentes)...")
 
     driver.get(config.PELANDO_URL)
-    time.sleep(3)
 
-    # Aguardar cards carregarem
+    # Aguardar cards carregarem — com tratamento do Cloudflare challenge
     try:
-        WebDriverWait(driver, 15).until(
+        WebDriverWait(driver, 45).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, SEL_DEAL_CARD))
         )
     except TimeoutException:
-        screenshot_path = "/tmp/pelando_timeout.png"
-        try:
-            driver.save_screenshot(screenshot_path)
-            logger.error(f"Timeout ao carregar cards do Pelando. URL: {driver.current_url}")
-            logger.error(f"Screenshot: {screenshot_path}")
-            logger.error(f"Page source (500 chars): {driver.page_source[:500]}")
-        except Exception:
-            logger.error("Timeout ao carregar cards do Pelando")
-        return []
+        # Verificar se é bloqueio Cloudflare
+        page_source = driver.page_source
+        if "security verification" in page_source.lower() or "verify you are human" in page_source.lower():
+            logger.warning("Cloudflare challenge detectado. Aguardando bypass automático (30s)...")
+            time.sleep(30)
+            # Tentar novamente após espera
+            try:
+                WebDriverWait(driver, 30).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, SEL_DEAL_CARD))
+                )
+            except TimeoutException:
+                driver.save_screenshot("/tmp/pelando_cloudflare.png")
+                logger.error("Cloudflare não foi bypassado. Screenshot: /tmp/pelando_cloudflare.png")
+                return []
+        else:
+            driver.save_screenshot("/tmp/pelando_timeout.png")
+            logger.error(f"Timeout ao carregar cards do Pelando. Screenshot: /tmp/pelando_timeout.png")
+            return []
 
     deals = []
     supported_stores = get_supported_stores()
