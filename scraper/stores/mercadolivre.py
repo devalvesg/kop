@@ -1,42 +1,15 @@
+import asyncio
 import logging
 import re
-import time
 import requests
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+import nodriver
 
 from scraper.stores.base_store import BaseStore
 from models.pelando_deal import PelandoDeal
 from models.product import Product
 
 logger = logging.getLogger("ML_STORE")
-
-# Seletores CSS para página do produto no ML
-SEL_PRODUCT_TITLE = "h1.ui-pdp-title"
-SEL_PRODUCT_PRICE = "span.andes-money-amount__fraction"
-SEL_PRODUCT_CENTS = "span.andes-money-amount__cents"
-SEL_PRODUCT_IMAGE = "img.ui-pdp-image"
-SEL_PRODUCT_RATING = "span.ui-pdp-review__rating"
-SEL_PRODUCT_SALES = "span.ui-pdp-subtitle"
-# Preço original (antes do desconto) - elemento <s> com classe andes-money-amount--previous
-SEL_ORIGINAL_PRICE = "s.andes-money-amount--previous"
-SEL_ORIGINAL_PRICE_FRACTION = "s.andes-money-amount--previous .andes-money-amount__fraction"
-SEL_ORIGINAL_PRICE_CENTS = "s.andes-money-amount--previous .andes-money-amount__cents"
-
-# Cupom disponível na página do produto
-SEL_COUPON_LABEL = "#coupon-awareness-row-label"
-
-# Seletor para landing page do ML (após redirect do Pelando)
-# Essa landing é exclusiva do ML, outras lojas vão direto pro produto
-SEL_GO_TO_PRODUCT_BTN = "a.poly-component__link--action-link"
-
-# Seletores para barra de afiliados
-SEL_GENERATE_LINK_BTN = "button.generate_link_button"
-SEL_LINK_TEXTAREA = "textarea.andes-form-control__field"
-SEL_COPY_LINK_BTN = "button.textfield-link__button"
-SEL_AFFILIATE_MODAL = "div.andes-modal__content"
 
 
 class MercadoLivreStore(BaseStore):
@@ -45,7 +18,7 @@ class MercadoLivreStore(BaseStore):
     domain_url = "https://www.mercadolivre.com.br"
     login_url = "https://www.mercadolivre.com.br/navigation/login"
 
-    def process_deal(self, driver, deal: PelandoDeal) -> Product | None:
+    async def process_deal(self, tab: nodriver.Tab, deal: PelandoDeal) -> Product | None:
         """
         Processa um deal do Pelando que é do Mercado Livre.
         1. Navega para a página do deal no Pelando
@@ -58,37 +31,35 @@ class MercadoLivreStore(BaseStore):
             logger.info(f"Processando deal ML: {deal.title[:50]}...")
 
             # 1. Navegar para página do deal no Pelando
-            driver.get(deal.deal_url)
-            time.sleep(2)
+            await tab.get(deal.deal_url)
+            await tab.sleep(2)
 
-            # 2. Verificar e clicar no botão "store-link-button" para ir ao ML
-            try:
-                store_btn = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, ".store-link-button"))
-                )
-
-                # Verificar se é cupom (botão "Pegar Cupom" ao invés de "Ir para loja")
-                btn_text = store_btn.text.strip().lower()
-                if "cupom" in btn_text:
-                    logger.info(f"Deal é cupom (botão: '{store_btn.text.strip()}'), ignorando")
-                    return None
-
-                store_btn.click()
-                logger.info("Clicou no botão para ir ao ML")
-            except TimeoutException:
+            # 2. Clicar no botão para ir ao ML
+            store_btn = await tab.select(".store-link-button", timeout=10)
+            if not store_btn:
                 logger.error("Botão store-link-button não encontrado")
                 return None
 
-            # Aguardar nova aba ou redirecionamento
-            time.sleep(3)
+            btn_text = (store_btn.text or "").strip().lower()
+            if "cupom" in btn_text:
+                logger.info(f"Deal é cupom (botão: '{btn_text}'), ignorando")
+                return None
 
-            # Verificar se abriu nova aba
-            if len(driver.window_handles) > 1:
-                driver.switch_to.window(driver.window_handles[-1])
-                logger.info("Trocou para nova aba do ML")
+            await store_btn.click()
+            logger.info("Clicou no botão para ir ao ML")
 
-            # 3. Aguardar carregar página do ML (short links mercadolivre.com/sec/ redirecionam)
-            current_url = driver.current_url
+            # Aguardar nova aba
+            await tab.sleep(3)
+
+            # Pegar a nova aba
+            browser = tab.browser
+            if len(browser.tabs) < 2:
+                logger.error("Nova aba não abriu após clicar no botão")
+                return None
+
+            ml_tab = browser.tabs[-1]
+            await ml_tab  # atualizar estado
+            current_url = ml_tab.url
             logger.info(f"URL atual: {current_url}")
 
             # Se for short link, aguardar redirect
@@ -96,26 +67,29 @@ class MercadoLivreStore(BaseStore):
                 short_link_url = current_url
                 logger.info("Short link detectado, aguardando browser resolver redirect...")
 
-                # Camada 1: Aguardar browser resolver (com Xvfb deve funcionar)
+                # Camada 1: Aguardar browser resolver
                 resolved = False
                 for i in range(15):
-                    time.sleep(2)
-                    current_url = driver.current_url
+                    await ml_tab.sleep(2)
+                    await ml_tab
+                    current_url = ml_tab.url
                     if "mercadolivre.com.br" in current_url:
                         logger.info(f"Browser resolveu redirect ({(i+1)*2}s): {current_url[:80]}")
                         resolved = True
                         break
                     logger.debug(f"Aguardando redirect... ({i+1}/15) URL: {current_url[:80]}")
 
-                # Camada 2: Extrair URL de redirect do page source (meta refresh, JS location)
+                # Camada 2: Extrair URL de redirect do page source
                 if not resolved:
                     logger.warning("Browser não resolveu, extraindo URL da página...")
-                    redirect_url = self._extract_redirect_from_page(driver)
+                    page_content = await ml_tab.get_content()
+                    redirect_url = self._extract_redirect_from_html(page_content)
                     if redirect_url:
                         logger.info(f"URL extraída da página: {redirect_url[:80]}")
-                        driver.get(redirect_url)
-                        time.sleep(2)
-                        current_url = driver.current_url
+                        await ml_tab.get(redirect_url)
+                        await ml_tab.sleep(2)
+                        await ml_tab
+                        current_url = ml_tab.url
                         resolved = "mercadolivre.com.br" in current_url
 
                 # Camada 3: Resolver via HTTP (cloudscraper/requests)
@@ -124,9 +98,10 @@ class MercadoLivreStore(BaseStore):
                     resolved_url = self._resolve_short_link(short_link_url)
                     if resolved_url and "mercadolivre.com.br" in resolved_url:
                         logger.info(f"Resolvido via HTTP: {resolved_url[:200]}")
-                        driver.get(resolved_url)
-                        time.sleep(2)
-                        current_url = driver.current_url
+                        await ml_tab.get(resolved_url)
+                        await ml_tab.sleep(2)
+                        await ml_tab
+                        current_url = ml_tab.url
                         resolved = "mercadolivre.com.br" in current_url
 
                 if not resolved:
@@ -135,39 +110,38 @@ class MercadoLivreStore(BaseStore):
             # Se não estiver no ML, algo deu errado
             if "mercadolivre.com.br" not in current_url:
                 logger.error(f"Não chegou no ML, URL: {current_url}")
-                self._close_extra_tabs(driver)
+                await self._close_extra_tabs(tab)
                 return None
 
             # 3.1 Se estiver na landing page (/social/pelando), clicar em "Ir para produto"
             if "/social/" in current_url:
                 logger.info("Detectada landing page do ML, clicando em 'Ir para produto'...")
-                try:
-                    go_to_product_btn = WebDriverWait(driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, SEL_GO_TO_PRODUCT_BTN))
-                    )
-                    go_to_product_btn.click()
-                    time.sleep(3)
-                    current_url = driver.current_url
+                go_btn = await ml_tab.select("a.poly-component__link--action-link", timeout=10)
+                if go_btn:
+                    await go_btn.click()
+                    await ml_tab.sleep(3)
+                    await ml_tab
+                    current_url = ml_tab.url
                     logger.info(f"Navegou para página do produto: {current_url}")
-                except TimeoutException:
+                else:
                     logger.error("Botão 'Ir para produto' não encontrado na landing page")
-                    self._close_extra_tabs(driver)
+                    await self._close_extra_tabs(tab)
                     return None
 
-            # 4. Aguardar barra de afiliados carregar e gerar link
-            time.sleep(2)
-            affiliate_link = self._generate_affiliate_link(driver)
+            # 4. Gerar link de afiliado
+            await ml_tab.sleep(2)
+            affiliate_link = await self._generate_affiliate_link(ml_tab)
 
             if not affiliate_link:
                 logger.warning("Não conseguiu gerar link de afiliado, usando URL direta")
                 affiliate_link = current_url
 
             # 5. Extrair dados do produto
-            product_data = self._extract_product_data(driver, deal)
+            product_data = await self._extract_product_data(ml_tab, deal)
 
             if not product_data:
                 logger.error("Falha ao extrair dados do produto")
-                self._close_extra_tabs(driver)
+                await self._close_extra_tabs(tab)
                 return None
 
             product = Product(
@@ -187,230 +161,182 @@ class MercadoLivreStore(BaseStore):
 
             logger.info(f"Produto extraído: {product.title[:50]} - {product.price}")
 
-            # Fechar abas extras e voltar para principal
-            self._close_extra_tabs(driver)
-
+            await self._close_extra_tabs(tab)
             return product
 
         except Exception as e:
             logger.error(f"Erro ao processar deal ML: {e}")
-            self._close_extra_tabs(driver)
+            await self._close_extra_tabs(tab)
             return None
 
-    def _generate_affiliate_link(self, driver) -> str:
+    async def _generate_affiliate_link(self, tab: nodriver.Tab) -> str:
         """Gera link de afiliado usando a barra de afiliados do ML."""
         try:
             # Aguardar botão de gerar link
-            generate_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, SEL_GENERATE_LINK_BTN))
-            )
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", generate_btn)
-            time.sleep(0.5)
-            generate_btn.click()
+            generate_btn = await tab.select("button.generate_link_button", timeout=10)
+            if not generate_btn:
+                logger.warning("Botão de gerar link não encontrado (usuário pode não estar logado como afiliado)")
+                return ""
+
+            await generate_btn.scroll_into_view()
+            await tab.sleep(0.5)
+            await generate_btn.click()
             logger.info("Clicou em 'Gerar link'")
 
-            time.sleep(2)
+            await tab.sleep(2)
 
-            # Tentar pegar link do textarea
-            try:
-                textarea = WebDriverWait(driver, 5).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, SEL_LINK_TEXTAREA))
-                )
-                affiliate_link = textarea.get_attribute("value") or textarea.text
-                if affiliate_link:
-                    logger.info(f"Link de afiliado obtido: {affiliate_link[:60]}...")
-                    return affiliate_link
-            except TimeoutException:
-                pass
+            # Tentar pegar link do textarea via JS
+            affiliate_link = await tab.evaluate("""
+                (() => {
+                    const textarea = document.querySelector('textarea.andes-form-control__field');
+                    return textarea ? (textarea.value || textarea.textContent || '') : '';
+                })()
+            """)
 
-            # Fallback: tentar capturar via clipboard
+            if affiliate_link:
+                logger.info(f"Link de afiliado obtido: {str(affiliate_link)[:60]}...")
+                return affiliate_link
+
+            # Fallback: interceptar clipboard via botão copiar
             try:
-                copy_btn = driver.find_element(By.CSS_SELECTOR, SEL_COPY_LINK_BTN)
-                driver.execute_script("""
-                    window.__copiedText = '';
-                    const originalWriteText = navigator.clipboard.writeText;
-                    navigator.clipboard.writeText = function(text) {
-                        window.__copiedText = text;
-                        return originalWriteText.call(navigator.clipboard, text);
-                    };
-                """)
-                copy_btn.click()
-                time.sleep(1)
-                affiliate_link = driver.execute_script("return window.__copiedText || '';")
-                if affiliate_link:
-                    logger.info(f"Link via clipboard: {affiliate_link[:60]}...")
-                    return affiliate_link
+                copy_btn = await tab.select("button.textfield-link__button", timeout=3)
+                if copy_btn:
+                    await tab.evaluate("""
+                        window.__copiedText = '';
+                        const orig = navigator.clipboard.writeText;
+                        navigator.clipboard.writeText = function(text) {
+                            window.__copiedText = text;
+                            return orig.call(navigator.clipboard, text);
+                        };
+                    """)
+                    await copy_btn.click()
+                    await tab.sleep(1)
+                    affiliate_link = await tab.evaluate("window.__copiedText || ''")
+                    if affiliate_link:
+                        logger.info(f"Link via clipboard: {str(affiliate_link)[:60]}...")
+                        return affiliate_link
             except Exception:
                 pass
 
             logger.warning("Não conseguiu capturar link de afiliado")
             return ""
 
-        except TimeoutException:
-            logger.warning("Botão de gerar link não encontrado (usuário pode não estar logado como afiliado)")
-            return ""
         except Exception as e:
             logger.error(f"Erro ao gerar link de afiliado: {e}")
             return ""
 
-    def _extract_product_data(self, driver, deal: PelandoDeal) -> dict | None:
-        """Extrai dados do produto da página do ML."""
+    async def _extract_product_data(self, tab: nodriver.Tab, deal: PelandoDeal) -> dict | None:
+        """Extrai dados do produto da página do ML via JavaScript."""
         try:
-            # Extrair MLb ID da URL
-            mlb_id = self._extract_mlb_id(driver.current_url)
+            await tab
+            mlb_id = self._extract_mlb_id(tab.url)
 
-            # Título
-            try:
-                title_el = driver.find_element(By.CSS_SELECTOR, SEL_PRODUCT_TITLE)
-                title = title_el.text.strip()
-            except NoSuchElementException:
-                title = deal.title  # Fallback para título do Pelando
+            data = await tab.evaluate("""
+                (() => {
+                    // Título
+                    const titleEl = document.querySelector('h1.ui-pdp-title');
+                    const title = titleEl?.textContent?.trim() || '';
 
-            # Preço atual - usar meta tag (mais confiável, não confunde com preço original)
-            price = ""
-            try:
-                meta_price = driver.find_element(By.CSS_SELECTOR, 'meta[itemprop="price"]')
-                price_value = meta_price.get_attribute("content")  # ex: "34.30"
-                if price_value:
-                    price = f"R$ {price_value.replace('.', ',')}"
-                    logger.info(f"Preço via meta tag: {price}")
-            except NoSuchElementException:
-                pass
-
-            if not price:
-                # Fallback: seletor CSS (pegar o que NÃO está dentro do <s>)
-                try:
-                    price_text = driver.execute_script("""
-                        var fractions = document.querySelectorAll('span.andes-money-amount__fraction');
-                        for (var f of fractions) {
+                    // Preço via meta tag (mais confiável)
+                    let price = '';
+                    const metaPrice = document.querySelector('meta[itemprop="price"]');
+                    if (metaPrice) {
+                        const val = metaPrice.getAttribute('content');
+                        if (val) price = 'R$ ' + val.replace('.', ',');
+                    }
+                    if (!price) {
+                        // Fallback: seletor CSS (pegar o que NÃO está dentro do <s>)
+                        const fractions = document.querySelectorAll('span.andes-money-amount__fraction');
+                        for (const f of fractions) {
                             if (!f.closest('s')) {
-                                var parent = f.closest('.andes-money-amount');
-                                var cents = parent ? parent.querySelector('.andes-money-amount__cents') : null;
-                                return f.textContent + '|' + (cents ? cents.textContent : '00');
+                                const parent = f.closest('.andes-money-amount');
+                                const cents = parent ? parent.querySelector('.andes-money-amount__cents') : null;
+                                price = 'R$ ' + f.textContent + ',' + (cents ? cents.textContent : '00');
+                                break;
                             }
                         }
-                        return null;
-                    """)
-                    if price_text:
-                        parts = price_text.split("|")
-                        price = f"R$ {parts[0]},{parts[1]}"
-                except Exception:
-                    price = deal.price  # Fallback para preço do Pelando
+                    }
 
-            if not price:
-                price = deal.price
+                    // Preço original (riscado) via aria-label
+                    let originalPrice = '';
+                    const origEl = document.querySelector('s.andes-money-amount--previous');
+                    if (origEl) {
+                        const aria = origEl.getAttribute('aria-label') || '';
+                        const m = aria.match(/(\\d[\\d.]*)\\ *reais?\\ *com\\ *(\\d+)\\ *centavos?/);
+                        if (m) {
+                            originalPrice = 'R$ ' + m[1].replace('.', '') + ',' + m[2];
+                        } else {
+                            const frac = origEl.querySelector('.andes-money-amount__fraction');
+                            const cents = origEl.querySelector('.andes-money-amount__cents');
+                            if (frac) {
+                                originalPrice = 'R$ ' + frac.textContent + ',' + (cents ? cents.textContent : '00');
+                            }
+                        }
+                    }
 
-            # Preço original (antes do desconto)
-            original_price = ""
-            try:
-                original_el = driver.find_element(By.CSS_SELECTOR, SEL_ORIGINAL_PRICE)
-                aria_label = original_el.get_attribute("aria-label") or ""
-                # aria-label: "Antes: 117 reais com 07 centavos"
-                match = re.search(r"(\d[\d.]*)\s*reais?\s*com\s*(\d+)\s*centavos?", aria_label)
-                if match:
-                    fraction = match.group(1).replace(".", "")
-                    cents = match.group(2)
-                    original_price = f"R$ {fraction},{cents}"
-                else:
-                    # Fallback: usar seletores CSS
-                    original_fraction_el = driver.find_element(By.CSS_SELECTOR, SEL_ORIGINAL_PRICE_FRACTION)
-                    original_fraction = original_fraction_el.text.strip()
-                    try:
-                        original_cents_el = driver.find_element(By.CSS_SELECTOR, SEL_ORIGINAL_PRICE_CENTS)
-                        original_cents = original_cents_el.text.strip()
-                        original_price = f"R$ {original_fraction},{original_cents}"
-                    except NoSuchElementException:
-                        original_price = f"R$ {original_fraction},00"
+                    // Descartar se igual ao preço atual
+                    if (originalPrice && originalPrice === price) originalPrice = '';
 
-                # Validação: descartar se preço original == preço atual
-                if original_price and original_price == price:
-                    logger.info(f"Preço original ({original_price}) igual ao atual, descartando")
-                    original_price = ""
-                elif original_price:
-                    logger.info(f"Preço original encontrado: {original_price}")
-            except NoSuchElementException:
-                logger.debug("Preço original não encontrado (produto pode não ter desconto)")
+                    // Imagem (melhor resolução)
+                    let imageUrl = '';
+                    const imgs = document.querySelectorAll('img.ui-pdp-image');
+                    for (const img of imgs) {
+                        const zoom = img.getAttribute('data-zoom') || '';
+                        if (zoom && zoom.includes('mlstatic.com')) { imageUrl = zoom; break; }
+                        const src = img.src || '';
+                        if (src && src.includes('mlstatic.com') && !imageUrl) imageUrl = src;
+                    }
+                    if (!imageUrl) {
+                        const og = document.querySelector('meta[property="og:image"]');
+                        if (og) imageUrl = og.getAttribute('content') || '';
+                    }
+                    if (imageUrl && imageUrl.includes('?')) imageUrl = imageUrl.split('?')[0];
 
-            # Imagem - tentar pegar a melhor resolução disponível
-            image_url = ""
-            try:
-                # 1. Tentar data-zoom da galeria (maior resolução disponível)
-                img_els = driver.find_elements(By.CSS_SELECTOR, SEL_PRODUCT_IMAGE)
-                for img_el in img_els:
-                    zoom_url = img_el.get_attribute("data-zoom") or ""
-                    if zoom_url and "mlstatic.com" in zoom_url:
-                        image_url = zoom_url
-                        break
-                    src_url = img_el.get_attribute("src") or ""
-                    if src_url and "mlstatic.com" in src_url and not image_url:
-                        image_url = src_url
+                    // Rating
+                    const ratingEl = document.querySelector('span.ui-pdp-review__rating');
+                    const rating = ratingEl?.textContent?.trim() || '';
 
-                # 2. Fallback: og:image
-                if not image_url:
-                    og_img = driver.find_elements(By.CSS_SELECTOR, 'meta[property="og:image"]')
-                    if og_img:
-                        image_url = og_img[0].get_attribute("content") or ""
+                    // Vendas
+                    const salesEl = document.querySelector('span.ui-pdp-subtitle');
+                    const salesText = salesEl?.textContent?.trim() || '';
+                    const salesInfo = salesText.toLowerCase().includes('vendido') ? salesText : '';
 
-                # Remover query params de resize
-                if "?" in image_url:
-                    image_url = image_url.split("?")[0]
+                    // Cupom
+                    let coupon = '';
+                    const couponEl = document.querySelector('#coupon-awareness-row-label');
+                    if (couponEl) {
+                        const ct = couponEl.textContent.trim();
+                        const cm = ct.match(/Aplicar\\s+(R\\$\\s*[\\d.,]+|[\\d.,]+%)\\s*OFF/);
+                        if (cm) coupon = cm[1].trim() + ' OFF';
+                    }
 
-                # Converter para alta resolução:
-                # D_Q_NP → D_NQ_NP (sem compressão de qualidade)
-                # sufixo -R (Reduced) → -O (Original)
-                # sufixo -V (Variant) → -O (Original)
-                if "mlstatic.com" in image_url:
-                    image_url = image_url.replace("/D_Q_NP_", "/D_NQ_NP_")
-                    image_url = re.sub(r"-[RV](\.\w+)$", r"-O\1", image_url)
+                    return { title, price, originalPrice, imageUrl, rating, salesInfo, coupon };
+                })()
+            """)
 
-                logger.info(f"URL da imagem: {image_url[:100]}...")
-            except NoSuchElementException:
-                image_url = deal.image_url  # Fallback
+            if not data or not data.get("title"):
+                title = deal.title  # Fallback para título do Pelando
+                if not title:
+                    logger.warning("Título do produto não encontrado")
+                    return None
+                data = data or {}
+                data["title"] = title
 
-            # Rating (opcional)
-            rating = ""
-            try:
-                rating_el = driver.find_element(By.CSS_SELECTOR, SEL_PRODUCT_RATING)
-                rating = rating_el.text.strip()
-            except NoSuchElementException:
-                pass
-
-            # Info de vendas (opcional)
-            sales_info = ""
-            try:
-                sales_el = driver.find_element(By.CSS_SELECTOR, SEL_PRODUCT_SALES)
-                sales_text = sales_el.text.strip()
-                if "vendido" in sales_text.lower():
-                    sales_info = sales_text
-            except NoSuchElementException:
-                pass
-
-            # Cupom disponível (opcional)
-            coupon = ""
-            try:
-                coupon_text = driver.execute_script("""
-                    var label = document.querySelector('#coupon-awareness-row-label');
-                    if (label) return label.textContent.trim();
-                    return null;
-                """)
-                if coupon_text:
-                    # Parse "Aplicar R$5 OFF." ou "Aplicar 10% OFF."
-                    match = re.search(r'Aplicar\s+(R\$\s*[\d.,]+|[\d.,]+%)\s*OFF', coupon_text)
-                    if match:
-                        coupon = match.group(1).strip() + " OFF"
-                        logger.info(f"Cupom encontrado: {coupon}")
-            except Exception:
-                pass
+            # Melhorar URL da imagem (alta resolução)
+            image_url = data.get("imageUrl", "")
+            if "mlstatic.com" in image_url:
+                image_url = image_url.replace("/D_Q_NP_", "/D_NQ_NP_")
+                image_url = re.sub(r"-[RV](\.\w+)$", r"-O\1", image_url)
 
             return {
                 "mlb_id": mlb_id,
-                "title": title,
-                "price": price,
-                "original_price": original_price,
-                "coupon": coupon,
-                "image_url": image_url,
-                "rating": rating,
-                "sales_info": sales_info,
+                "title": data["title"],
+                "price": data.get("price", "") or deal.price,
+                "original_price": data.get("originalPrice", ""),
+                "coupon": data.get("coupon", ""),
+                "image_url": image_url or deal.image_url,
+                "rating": data.get("rating", ""),
+                "sales_info": data.get("salesInfo", ""),
             }
 
         except Exception as e:
@@ -419,30 +345,26 @@ class MercadoLivreStore(BaseStore):
 
     def _extract_mlb_id(self, url: str) -> str:
         """Extrai o MLB ID da URL do produto."""
-        # Padrão: MLB-1234567890 ou MLB1234567890
         match = re.search(r"MLB-?(\d+)", url, re.IGNORECASE)
         if match:
             return f"MLB{match.group(1)}"
-        # Fallback: usar hash da URL
         return f"MLB{abs(hash(url)) % 10000000000}"
 
-    def _extract_redirect_from_page(self, driver) -> str:
-        """Extrai URL de redirect do page source (meta refresh, JS location, etc)."""
+    def _extract_redirect_from_html(self, html: str) -> str:
+        """Extrai URL de redirect do HTML (meta refresh, JS location, etc)."""
         try:
-            page_source = driver.page_source
-
-            # Meta refresh: <meta http-equiv="refresh" content="0;url=...">
+            # Meta refresh
             match = re.search(
                 r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\'][^"\']*url=([^"\'>\s]+)',
-                page_source, re.IGNORECASE
+                html, re.IGNORECASE
             )
             if match and "mercadolivre.com.br" in match.group(1):
                 return match.group(1)
 
-            # JS: window.location = "..." ou location.href = "..."
+            # JS: window.location = "..."
             match = re.search(
                 r'(?:window\.)?location(?:\.href)?\s*=\s*["\']([^"\']+mercadolivre\.com\.br[^"\']*)["\']',
-                page_source
+                html
             )
             if match:
                 return match.group(1)
@@ -450,7 +372,7 @@ class MercadoLivreStore(BaseStore):
             # JS: location.replace("...")
             match = re.search(
                 r'location\.replace\s*\(\s*["\']([^"\']+mercadolivre\.com\.br[^"\']*)["\']',
-                page_source
+                html
             )
             if match:
                 return match.group(1)
@@ -458,25 +380,24 @@ class MercadoLivreStore(BaseStore):
             # Qualquer URL de produto ML na página
             match = re.search(
                 r'(https?://[^\s"\'<>]+mercadolivre\.com\.br/[^\s"\'<>]*MLB[^\s"\'<>]*)',
-                page_source
+                html
             )
             if match:
                 return match.group(1)
 
-            # Log snippet do page source para debug
-            logger.debug(f"Page source (500 chars): {page_source[:500]}")
+            logger.debug(f"Page source (500 chars): {html[:500]}")
         except Exception as e:
             logger.warning(f"Erro ao extrair redirect da página: {e}")
         return ""
 
     def _resolve_short_link(self, url: str) -> str:
-        """Resolve short link do ML seguindo redirects passo a passo (preserva params como ref)."""
+        """Resolve short link do ML seguindo redirects passo a passo."""
         headers = {
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-        # 1. Tentar com cloudscraper (lida com desafios Cloudflare básicos)
+        # 1. Tentar com cloudscraper
         try:
             import cloudscraper
             scraper = cloudscraper.create_scraper()
@@ -490,7 +411,7 @@ class MercadoLivreStore(BaseStore):
         except Exception as e:
             logger.warning(f"Erro cloudscraper: {e}")
 
-        # 2. Seguir redirects manualmente para preservar parâmetros (ref, etc)
+        # 2. Seguir redirects manualmente
         try:
             from urllib.parse import urlparse
             session = requests.Session()
@@ -501,7 +422,6 @@ class MercadoLivreStore(BaseStore):
                 logger.info(f"Redirect step {step}: HTTP {resp.status_code} -> {location[:150] if location else 'N/A'}")
 
                 if resp.status_code in (301, 302, 303, 307, 308) and location:
-                    # Resolver URLs relativas
                     if location.startswith("/"):
                         parsed = urlparse(current_url)
                         location = f"{parsed.scheme}://{parsed.netloc}{location}"
@@ -526,35 +446,43 @@ class MercadoLivreStore(BaseStore):
                 logger.warning(f"Erro {method.__name__} ao resolver short link: {e}")
         return ""
 
-    def _close_extra_tabs(self, driver):
+    async def _close_extra_tabs(self, main_tab: nodriver.Tab):
         """Fecha abas extras e volta para a principal."""
         try:
-            while len(driver.window_handles) > 1:
-                driver.switch_to.window(driver.window_handles[-1])
-                driver.close()
-            driver.switch_to.window(driver.window_handles[0])
+            browser = main_tab.browser
+            for t in browser.tabs[:]:
+                if t != main_tab:
+                    try:
+                        await t.close()
+                    except Exception:
+                        pass
+            await main_tab.bring_to_front()
         except Exception:
             pass
 
-    def is_logged_in(self, driver) -> bool:
+    async def is_logged_in(self, browser: nodriver.Browser) -> bool:
         """Verifica se está logado no programa de afiliados do ML."""
         try:
-            driver.get("https://www.mercadolivre.com.br/afiliados/hub")
-            time.sleep(3)
-            current_url = driver.current_url
-            return "login" not in current_url and "afiliados" in current_url
+            check_tab = await browser.get("https://www.mercadolivre.com.br/afiliados/hub", new_tab=True)
+            await check_tab.sleep(3)
+            await check_tab
+            current_url = check_tab.url
+            logged_in = "login" not in current_url and "afiliados" in current_url
+            await check_tab.close()
+            return logged_in
         except Exception:
             return False
 
-    def login(self, driver) -> bool:
+    async def login(self, browser: nodriver.Browser) -> bool:
         """Realiza login no ML (redireciona para login manual)."""
         try:
-            driver.get(self.login_url)
+            login_tab = await browser.get(self.login_url, new_tab=True)
             print("\n" + "=" * 60)
             print("FAÇA LOGIN NO MERCADO LIVRE NO NAVEGADOR QUE ABRIU")
             print("Após fazer login, pressione ENTER aqui no terminal...")
             print("=" * 60 + "\n")
-            input()
-            return self.is_logged_in(driver)
+            await asyncio.get_event_loop().run_in_executor(None, input)
+            await login_tab.close()
+            return await self.is_logged_in(browser)
         except Exception:
             return False

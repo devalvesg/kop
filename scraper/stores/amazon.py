@@ -1,10 +1,8 @@
+import asyncio
 import logging
 import re
-import time
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+import nodriver
 
 from scraper.stores.base_store import BaseStore
 from models.pelando_deal import PelandoDeal
@@ -13,19 +11,6 @@ from config import AMAZON_AFFILIATE_TAG
 
 logger = logging.getLogger("AMAZON_STORE")
 
-# Seletores Amazon SiteStripe (barra de afiliados)
-SEL_GET_LINK_BTN = "#amzn-ss-get-link-button"
-SEL_SHORT_LINK_TEXTAREA = "#amzn-ss-text-shortlink-textarea"
-
-# Seletores página do produto Amazon
-SEL_PRODUCT_TITLE = "#productTitle"
-SEL_PRICE_WHOLE = "span.a-price-whole"
-SEL_PRICE_FRACTION = "span.a-price-fraction"
-SEL_ORIGINAL_PRICE = "span.a-price[data-a-strike] span.a-offscreen"
-SEL_PRODUCT_IMAGE = "#landingImage"
-SEL_RATING = "span.a-icon-alt"
-SEL_COUPON_BADGE = "#couponBadgeRegularVpc"
-
 
 class AmazonStore(BaseStore):
     name = "amazon"
@@ -33,74 +18,74 @@ class AmazonStore(BaseStore):
     domain_url = "https://www.amazon.com.br"
     login_url = "https://associados.amazon.com.br"
 
-    def process_deal(self, driver, deal: PelandoDeal) -> Product | None:
+    async def process_deal(self, tab: nodriver.Tab, deal: PelandoDeal) -> Product | None:
         """
         Processa um deal do Pelando que é da Amazon.
         1. Navega para a página do deal no Pelando
         2. Clica no botão para ir à Amazon
-        3. Na página do produto, clica em "Obter Link" (SiteStripe)
-        4. Extrai short link do textarea
-        5. Extrai dados do produto
-        6. Retorna Product
+        3. Gera link de afiliado via ASIN + tag
+        4. Extrai dados do produto
+        5. Retorna Product
         """
         try:
             logger.info(f"Processando deal Amazon: {deal.title[:50]}...")
 
             # 1. Navegar para página do deal no Pelando
-            driver.get(deal.deal_url)
-            time.sleep(2)
+            await tab.get(deal.deal_url)
+            await tab.sleep(2)
 
             # 2. Clicar no botão para ir à Amazon
-            try:
-                store_btn = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.CSS_SELECTOR, ".store-link-button"))
-                )
-
-                btn_text = store_btn.text.strip().lower()
-                if "cupom" in btn_text:
-                    logger.info(f"Deal é cupom (botão: '{store_btn.text.strip()}'), ignorando")
-                    return None
-
-                store_btn.click()
-                logger.info("Clicou no botão para ir à Amazon")
-            except TimeoutException:
+            store_btn = await tab.select(".store-link-button", timeout=10)
+            if not store_btn:
                 logger.error("Botão store-link-button não encontrado")
                 return None
 
-            # Aguardar nova aba
-            time.sleep(3)
+            btn_text = (store_btn.text or "").strip().lower()
+            if "cupom" in btn_text:
+                logger.info(f"Deal é cupom (botão: '{btn_text}'), ignorando")
+                return None
 
-            # Trocar para nova aba
-            if len(driver.window_handles) > 1:
-                driver.switch_to.window(driver.window_handles[-1])
-                logger.info("Trocou para nova aba da Amazon")
+            await store_btn.click()
+            logger.info("Clicou no botão para ir à Amazon")
 
-            current_url = driver.current_url
+            # Aguardar nova aba abrir
+            await tab.sleep(3)
+
+            # Pegar a nova aba (última aberta)
+            browser = tab.browser
+            if len(browser.tabs) < 2:
+                logger.error("Nova aba não abriu após clicar no botão")
+                return None
+
+            amazon_tab = browser.tabs[-1]
+            await amazon_tab  # atualizar estado interno
+            current_url = amazon_tab.url
             logger.info(f"URL atual: {current_url}")
 
             # Verificar se chegou na Amazon
             if "amazon.com" not in current_url:
                 logger.error(f"Não chegou na Amazon, URL: {current_url}")
-                self._close_extra_tabs(driver)
+                await self._close_extra_tabs(tab)
                 return None
 
             # 3. Aguardar página carregar
-            time.sleep(3)
+            await amazon_tab.sleep(3)
 
-            # 4. Gerar link de afiliado via SiteStripe
-            affiliate_link = self._generate_affiliate_link(driver)
+            # 4. Gerar link de afiliado via ASIN + tag
+            await amazon_tab  # atualizar URL após possíveis redirects
+            affiliate_link = self._generate_affiliate_link(amazon_tab.url)
 
             if not affiliate_link:
                 logger.warning("Não conseguiu gerar link de afiliado Amazon")
-                self._close_extra_tabs(driver)
+                await self._close_extra_tabs(tab)
                 return None
 
             # 5. Extrair dados do produto
-            product_data = self._extract_product_data(driver, current_url)
+            product_data = await self._extract_product_data(amazon_tab, amazon_tab.url)
 
             if not product_data:
                 logger.error("Falha ao extrair dados do produto Amazon")
-                self._close_extra_tabs(driver)
+                await self._close_extra_tabs(tab)
                 return None
 
             # 6. Montar Product
@@ -124,51 +109,55 @@ class AmazonStore(BaseStore):
             )
 
             # 7. Fechar aba extra
-            self._close_extra_tabs(driver)
+            await self._close_extra_tabs(tab)
 
             return product
 
         except Exception as e:
             logger.error(f"Erro ao processar deal Amazon: {e}")
-            self._close_extra_tabs(driver)
+            await self._close_extra_tabs(tab)
             return None
 
-    def is_logged_in(self, driver) -> bool:
+    async def is_logged_in(self, browser: nodriver.Browser) -> bool:
         """Verifica se está logado no Amazon Associates (SiteStripe visível)."""
         try:
-            driver.get("https://www.amazon.com.br")
-            time.sleep(3)
-            # SiteStripe aparece como barra no topo quando logado
-            sitestripe = driver.find_elements(By.CSS_SELECTOR, "#amzn-ss-wrap")
-            logged_in = len(sitestripe) > 0
+            check_tab = await browser.get("https://www.amazon.com.br", new_tab=True)
+            await check_tab.sleep(3)
+
+            sitestripe = await check_tab.select("#amzn-ss-wrap", timeout=5)
+            logged_in = sitestripe is not None
+
             if logged_in:
                 logger.info("Logado no Amazon Associates (SiteStripe visível)")
             else:
                 logger.warning("Não logado no Amazon Associates")
+
+            await check_tab.close()
             return logged_in
         except Exception as e:
             logger.error(f"Erro ao verificar login Amazon: {e}")
             return False
 
-    def login(self, driver) -> bool:
+    async def login(self, browser: nodriver.Browser) -> bool:
         """Login manual no Amazon Associates."""
-        driver.get(self.login_url)
-        time.sleep(2)
+        login_tab = await browser.get(self.login_url, new_tab=True)
+        await login_tab.sleep(2)
 
         print("\n" + "=" * 60)
         print("FAÇA LOGIN NO AMAZON ASSOCIATES NO NAVEGADOR QUE ABRIU")
         print("Após fazer login, pressione ENTER aqui no terminal...")
         print("=" * 60 + "\n")
-        input()
+        await asyncio.get_event_loop().run_in_executor(None, input)
 
-        return self.is_logged_in(driver)
+        await login_tab.close()
+        return await self.is_logged_in(browser)
 
-    def _generate_affiliate_link(self, driver) -> str:
+    def _generate_affiliate_link(self, url: str) -> str:
         """Constrói link limpo de afiliado a partir do ASIN + tag."""
         try:
-            asin = self._extract_asin(driver.current_url)
+            asin = self._extract_asin(url)
             if not asin:
-                logger.error(f"ASIN não encontrado na URL: {driver.current_url}")
+                logger.error(f"ASIN não encontrado na URL: {url}")
                 return ""
             affiliate_link = f"https://www.amazon.com.br/dp/{asin}?tag={AMAZON_AFFILIATE_TAG}"
             logger.info(f"Link de afiliado gerado: {affiliate_link}")
@@ -177,65 +166,66 @@ class AmazonStore(BaseStore):
             logger.error(f"Erro ao gerar link de afiliado Amazon: {e}")
             return ""
 
-    def _extract_product_data(self, driver, url: str) -> dict | None:
-        """Extrai dados do produto da página da Amazon."""
+    async def _extract_product_data(self, tab: nodriver.Tab, url: str) -> dict | None:
+        """Extrai dados do produto da página da Amazon via JavaScript."""
         try:
-            # ID do produto (ASIN)
             product_id = self._extract_asin(url)
 
-            # Título
-            title = ""
-            try:
-                title_el = driver.find_element(By.CSS_SELECTOR, SEL_PRODUCT_TITLE)
-                title = title_el.text.strip()
-            except NoSuchElementException:
-                pass
+            data = await tab.evaluate("""
+                (() => {
+                    const title = document.querySelector('#productTitle')?.textContent?.trim() || '';
 
-            if not title:
+                    // Preço
+                    const whole = document.querySelector('span.a-price-whole')?.textContent?.trim()?.replace('.', '')?.replace(',', '') || '';
+                    const fraction = document.querySelector('span.a-price-fraction')?.textContent?.trim() || '00';
+                    let price = '';
+                    if (whole) {
+                        price = 'R$ ' + whole.replace(/,$/, '') + ',' + fraction;
+                    } else {
+                        const offscreen = document.querySelector('span.a-price span.a-offscreen');
+                        if (offscreen) price = offscreen.textContent?.trim() || '';
+                    }
+
+                    // Preço original (riscado)
+                    let originalPrice = '';
+                    const origEl = document.querySelector('span.a-price[data-a-strike] span.a-offscreen');
+                    if (origEl) {
+                        const t = origEl.textContent?.trim() || '';
+                        if (t.includes('R$')) originalPrice = t;
+                    }
+
+                    // Imagem
+                    const imgEl = document.querySelector('#landingImage');
+                    const imageUrl = imgEl?.src || '';
+
+                    // Rating
+                    let rating = '';
+                    const ratingEl = document.querySelector('span.a-icon-alt');
+                    if (ratingEl) {
+                        const m = ratingEl.textContent.match(/([\\d,\\.]+)/);
+                        if (m) rating = m[1];
+                    }
+
+                    // Cupom
+                    const couponEl = document.querySelector('#couponBadgeRegularVpc');
+                    const coupon = couponEl?.textContent?.trim() || '';
+
+                    return { title, price, originalPrice, imageUrl, rating, coupon };
+                })()
+            """)
+
+            if not data or not data.get("title"):
                 logger.warning("Título do produto não encontrado")
                 return None
 
-            # Preço atual
-            price = self._extract_price(driver)
-
-            # Preço original (riscado)
-            original_price = self._extract_original_price(driver)
-
-            # Imagem
-            image_url = ""
-            try:
-                img_el = driver.find_element(By.CSS_SELECTOR, SEL_PRODUCT_IMAGE)
-                image_url = img_el.get_attribute("src") or ""
-            except NoSuchElementException:
-                pass
-
-            # Rating
-            rating = ""
-            try:
-                rating_el = driver.find_element(By.CSS_SELECTOR, SEL_RATING)
-                rating_text = rating_el.text.strip()
-                match = re.search(r"([\d,\.]+)", rating_text)
-                if match:
-                    rating = match.group(1)
-            except NoSuchElementException:
-                pass
-
-            # Cupom
-            coupon = ""
-            try:
-                coupon_el = driver.find_element(By.CSS_SELECTOR, SEL_COUPON_BADGE)
-                coupon = coupon_el.text.strip()
-            except NoSuchElementException:
-                pass
-
             return {
                 "product_id": product_id,
-                "title": title,
-                "price": price,
-                "original_price": original_price,
-                "image_url": image_url,
-                "rating": rating,
-                "coupon": coupon,
+                "title": data["title"],
+                "price": data.get("price", ""),
+                "original_price": data.get("originalPrice", ""),
+                "image_url": data.get("imageUrl", ""),
+                "rating": data.get("rating", ""),
+                "coupon": data.get("coupon", ""),
             }
 
         except Exception as e:
@@ -252,46 +242,16 @@ class AmazonStore(BaseStore):
             return match.group(1)
         return f"AMZ{abs(hash(url)) % 10000000000}"
 
-    def _extract_price(self, driver) -> str:
-        """Extrai o preço atual do produto."""
-        try:
-            whole_el = driver.find_element(By.CSS_SELECTOR, SEL_PRICE_WHOLE)
-            whole = whole_el.text.strip().replace(".", "").rstrip(",")
-            cents = "00"
-            try:
-                cents_el = driver.find_element(By.CSS_SELECTOR, SEL_PRICE_FRACTION)
-                cents = cents_el.text.strip()
-            except NoSuchElementException:
-                pass
-            return f"R$ {whole},{cents}"
-        except NoSuchElementException:
-            # Fallback: tentar span.a-offscreen (primeiro preço visível)
-            try:
-                price_el = driver.find_element(By.CSS_SELECTOR, "span.a-price span.a-offscreen")
-                price_text = price_el.get_attribute("textContent").strip()
-                if "R$" in price_text:
-                    return price_text
-            except NoSuchElementException:
-                pass
-        return ""
-
-    def _extract_original_price(self, driver) -> str:
-        """Extrai o preço original (riscado) se existir."""
-        try:
-            original_el = driver.find_element(By.CSS_SELECTOR, SEL_ORIGINAL_PRICE)
-            price_text = original_el.get_attribute("textContent").strip()
-            if "R$" in price_text:
-                return price_text
-        except NoSuchElementException:
-            pass
-        return ""
-
-    def _close_extra_tabs(self, driver):
+    async def _close_extra_tabs(self, main_tab: nodriver.Tab):
         """Fecha abas extras e volta para a principal."""
         try:
-            while len(driver.window_handles) > 1:
-                driver.switch_to.window(driver.window_handles[-1])
-                driver.close()
-            driver.switch_to.window(driver.window_handles[0])
+            browser = main_tab.browser
+            for t in browser.tabs[:]:
+                if t != main_tab:
+                    try:
+                        await t.close()
+                    except Exception:
+                        pass
+            await main_tab.bring_to_front()
         except Exception as e:
             logger.warning(f"Erro ao fechar abas extras: {e}")

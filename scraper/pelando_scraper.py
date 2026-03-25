@@ -1,9 +1,7 @@
+import asyncio
 import logging
-import time
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+
+import nodriver
 
 from models.pelando_deal import PelandoDeal
 from scraper.stores import get_handler, get_supported_stores
@@ -11,134 +9,23 @@ import config
 
 logger = logging.getLogger("PELANDO")
 
-# Seletores CSS do Pelando
-# O card principal tem data-show-author (true ou false)
-SEL_DEAL_CARD = "div[data-show-author]"
-SEL_CARD_TITLE = "h3[class*='title'] a"
-SEL_CARD_PRICE = "span[class*='deal-card-stamp']"
-SEL_CARD_IMAGE = "img[class*='deal-card-image']"
-# LOJA - usar XPath pois CSS selector não funciona corretamente
-SEL_CARD_STORE_XPATH = ".//a[contains(@href, '/cupons-de-descontos/')]"
-SEL_CARD_TEMPERATURE = "div[class*='deal-card-temperature'] span"
-SEL_CARD_ACTION = "a[class*='deal-card-action']"
-
 # Quantidade máxima de deals a processar por ciclo
 MAX_DEALS_TO_PROCESS = 10
-
-
-def _is_expired(card) -> bool:
-    """Verifica se o deal está expirado."""
-    try:
-        # Verificar data-inactive="true" no título (link principal)
-        title_link = card.find_element(By.CSS_SELECTOR, SEL_CARD_TITLE)
-        if title_link.get_attribute("data-inactive") == "true":
-            return True
-
-        # Verificar se existe label "Expirada"
-        expired_labels = card.find_elements(By.CSS_SELECTOR, "[class*='inactive-label']")
-        for label in expired_labels:
-            if "expirada" in label.text.lower():
-                return True
-
-        return False
-    except Exception:
-        return False
 
 
 def _is_coupon_only(title: str) -> bool:
     """Verifica se o deal é APENAS um cupom sem produto (ex: 'Cupom 10% OFF na loja X').
     Deals com [CUPOM] no título são produtos normais que têm cupom de desconto, não filtrar."""
     title_lower = title.lower().strip()
-    # Filtrar apenas se o título COMEÇA com "cupom" (é um deal de cupom puro, sem produto)
     return title_lower.startswith("cupom")
 
 
-def _extract_deal_data(card) -> PelandoDeal | None:
-    """Extrai dados de um card de deal do Pelando."""
-    try:
-        # Verificar se está expirado
-        if _is_expired(card):
-            logger.debug("Deal expirado, pulando")
-            return None
-
-        # Título e URL do deal
-        try:
-            title_el = card.find_element(By.CSS_SELECTOR, SEL_CARD_TITLE)
-            title = title_el.text.strip()
-            deal_url = title_el.get_attribute("href")
-        except NoSuchElementException:
-            logger.debug("Card sem título, pulando")
-            return None
-
-        # Verificar se é cupom puro (título começa com "cupom")
-        if _is_coupon_only(title):
-            logger.debug(f"Deal é cupom puro, pulando: {title[:40]}")
-            return None
-
-        # Preço
-        price = ""
-        try:
-            price_el = card.find_element(By.CSS_SELECTOR, SEL_CARD_PRICE)
-            price_text = price_el.text.strip()
-            # Formato: "R$\n493" ou similar
-            price = price_text.replace("\n", " ").strip()
-            if not price.startswith("R$"):
-                price = f"R$ {price}"
-        except NoSuchElementException:
-            pass
-
-        # Imagem
-        image_url = ""
-        try:
-            image_el = card.find_element(By.CSS_SELECTOR, SEL_CARD_IMAGE)
-            image_url = image_el.get_attribute("src") or ""
-        except NoSuchElementException:
-            pass
-
-        # Loja (vendido por) - usar XPath
-        # Há dois links com href cupons-de-descontos: um ícone (sem texto) e o nome da loja
-        store_name = ""
-        try:
-            store_links = card.find_elements(By.XPATH, SEL_CARD_STORE_XPATH)
-            for link in store_links:
-                text = link.text.strip()
-                if text:
-                    store_name = text
-                    break
-        except NoSuchElementException:
-            pass
-
-        # Temperatura (grau de promoção)
-        temperature = ""
-        try:
-            temp_el = card.find_element(By.CSS_SELECTOR, SEL_CARD_TEMPERATURE)
-            temperature = temp_el.text.strip()
-        except NoSuchElementException:
-            pass
-
-        if not title or not deal_url:
-            return None
-
-        return PelandoDeal(
-            title=title,
-            price=price,
-            image_url=image_url,
-            temperature=temperature,
-            store_name=store_name,
-            deal_url=deal_url,
-        )
-
-    except Exception as e:
-        logger.debug(f"Erro ao extrair deal: {e}")
-        return None
-
-
-def get_deals(driver, store_filter: str | None = None) -> list[PelandoDeal]:
+async def get_deals(tab: nodriver.Tab, store_filter: str | None = None) -> list[PelandoDeal]:
     """
     Extrai deals do Pelando na aba "Recentes".
 
     Args:
-        driver: WebDriver do Selenium
+        tab: Tab do nodriver
         store_filter: Nome da loja para filtrar (ex: "Mercado Livre").
                       Se None, retorna apenas lojas suportadas.
 
@@ -147,51 +34,88 @@ def get_deals(driver, store_filter: str | None = None) -> list[PelandoDeal]:
     """
     logger.info("Navegando para Pelando (Recentes)...")
 
-    driver.get(config.PELANDO_URL)
+    await tab.get(config.PELANDO_URL)
 
-    # Aguardar cards carregarem — com tratamento do Cloudflare challenge
+    # Bypass Cloudflare Turnstile (principal motivação da migração para nodriver)
     try:
-        WebDriverWait(driver, 45).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, SEL_DEAL_CARD))
-        )
-    except TimeoutException:
-        # Verificar se é bloqueio Cloudflare
-        page_source = driver.page_source
-        if "security verification" in page_source.lower() or "verify you are human" in page_source.lower():
-            logger.warning("Cloudflare challenge detectado. Aguardando bypass automático (30s)...")
-            time.sleep(30)
-            # Tentar novamente após espera
-            try:
-                WebDriverWait(driver, 30).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, SEL_DEAL_CARD))
-                )
-            except TimeoutException:
-                driver.save_screenshot("/tmp/pelando_cloudflare.png")
-                logger.error("Cloudflare não foi bypassado. Screenshot: /tmp/pelando_cloudflare.png")
-                return []
-        else:
-            driver.save_screenshot("/tmp/pelando_timeout.png")
-            logger.error(f"Timeout ao carregar cards do Pelando. Screenshot: /tmp/pelando_timeout.png")
-            return []
+        await tab.verify_cf()
+        logger.info("Cloudflare verify_cf executado")
+    except Exception as e:
+        logger.warning(f"verify_cf falhou (pode não ter challenge): {e}")
+
+    await tab.sleep(2)
+
+    # Aguardar cards carregarem
+    card = await tab.select("div[data-show-author]", timeout=45)
+    if not card:
+        await tab.save_screenshot("/tmp/pelando_timeout.png")
+        logger.error("Timeout ao carregar cards do Pelando. Screenshot: /tmp/pelando_timeout.png")
+        return []
+
+    # Extrair dados dos cards via JavaScript (mais rápido e robusto que select_all)
+    deals_data = await tab.evaluate("""
+        (() => {
+            const cards = Array.from(document.querySelectorAll("div[data-show-author]"));
+            return cards.map(card => {
+                const titleEl = card.querySelector("h3[class*='title'] a");
+                const priceEl = card.querySelector("span[class*='deal-card-stamp']");
+                const imgEl = card.querySelector("img[class*='deal-card-image']");
+                const tempEl = card.querySelector("div[class*='deal-card-temperature'] span");
+                const storeLinks = Array.from(card.querySelectorAll("a[href*='/cupons-de-descontos/']"));
+                const storeName = storeLinks.find(l => l.textContent.trim())?.textContent.trim() || "";
+                const isExpired = titleEl?.getAttribute("data-inactive") === "true"
+                    || !!card.querySelector("[class*='inactive-label']");
+                return {
+                    title: titleEl?.textContent.trim() || "",
+                    deal_url: titleEl?.href || "",
+                    price: priceEl?.textContent.replace(/\\n/g, " ").trim() || "",
+                    image_url: imgEl?.src || "",
+                    temperature: tempEl?.textContent.trim() || "",
+                    store_name: storeName,
+                    is_expired: isExpired,
+                };
+            });
+        })()
+    """)
+
+    if not deals_data:
+        logger.warning("Nenhum card extraído via JS")
+        return []
 
     deals = []
     supported_stores = get_supported_stores()
     processed_urls = set()
 
-    cards = driver.find_elements(By.CSS_SELECTOR, SEL_DEAL_CARD)
-    logger.info(f"Total de cards visíveis: {len(cards)}")
+    logger.info(f"Total de cards extraídos: {len(deals_data)}")
 
-    for card in cards:
-        # Limitar quantidade de deals processados
+    for d in deals_data:
         if len(deals) >= MAX_DEALS_TO_PROCESS:
             logger.info(f"Limite de {MAX_DEALS_TO_PROCESS} deals atingido")
             break
 
-        deal = _extract_deal_data(card)
-        if not deal or deal.deal_url in processed_urls:
+        if d.get("is_expired") or not d.get("title") or not d.get("deal_url"):
             continue
 
-        processed_urls.add(deal.deal_url)
+        if _is_coupon_only(d["title"]):
+            logger.debug(f"Deal é cupom puro, pulando: {d['title'][:40]}")
+            continue
+
+        if d["deal_url"] in processed_urls:
+            continue
+        processed_urls.add(d["deal_url"])
+
+        price = d.get("price", "")
+        if price and not price.startswith("R$"):
+            price = f"R$ {price}"
+
+        deal = PelandoDeal(
+            title=d["title"],
+            price=price,
+            image_url=d.get("image_url", ""),
+            temperature=d.get("temperature", ""),
+            store_name=d.get("store_name", ""),
+            deal_url=d["deal_url"],
+        )
 
         # Filtrar por loja específica ou lojas suportadas
         if store_filter:
@@ -214,27 +138,26 @@ def get_deals(driver, store_filter: str | None = None) -> list[PelandoDeal]:
     return deals
 
 
-def scrape_pelando(driver, logged_in_stores: set[str] | None = None) -> list:
+async def scrape_pelando(tab: nodriver.Tab, logged_in_stores: set[str] | None = None) -> list:
     """
     Scrape principal do Pelando.
     Extrai deals e processa usando o handler de cada loja.
 
     Args:
-        driver: WebDriver do Selenium
+        tab: Tab do nodriver
         logged_in_stores: Set de store names com sessão ativa.
                           Se None, processa todas as lojas.
 
     Returns:
         Lista de Products processados
     """
-    from models.product import Product
     from database import db
 
     logger.info("=" * 60)
     logger.info("Iniciando scrape do Pelando")
     logger.info("=" * 60)
 
-    deals = get_deals(driver)
+    deals = await get_deals(tab)
 
     if not deals:
         logger.info("Nenhum deal encontrado")
@@ -264,11 +187,10 @@ def scrape_pelando(driver, logged_in_stores: set[str] | None = None) -> list:
 
             logger.info(f"Processando deal via {handler.display_name}: {deal.title[:40]}...")
 
-            product = handler.process_deal(driver, deal)
+            product = await handler.process_deal(tab, deal)
 
             if product:
                 products.append(product)
-                # Marcar deal como processado
                 db.mark_deal_processed(deal.deal_url)
                 logger.info(f"Produto processado: {product.mlb_id}")
             else:

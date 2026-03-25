@@ -1,11 +1,13 @@
+import asyncio
 import logging
 import signal
 import sys
-from apscheduler.schedulers.blocking import BlockingScheduler
+import nodriver as uc
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import config
 from database import db
-from scraper.browser import get_driver, stop_virtual_display, load_store_cookies, save_store_cookies
+from scraper.browser import get_browser, stop_virtual_display
 from scraper.pelando_scraper import scrape_pelando
 from scraper.stores import STORE_HANDLERS
 from ai.message_generator import generate_message, extract_title
@@ -13,30 +15,25 @@ from messaging import telegram_sender, whatsapp_sender
 
 logger = logging.getLogger("MAIN")
 
-driver = None
+browser = None
 scheduler = None
 _shutting_down = False
-_logged_in_stores: set[str] = set()  # Lojas com sessão ativa
+_logged_in_stores: set[str] = set()
 
 
-def ensure_store_logins(drv):
-    """Verifica login em todas as lojas. Carrega cookies e faz login manual se necessário."""
+async def ensure_store_logins():
+    """Verifica login em todas as lojas usando o perfil persistente do Chrome."""
     global _logged_in_stores
     _logged_in_stores.clear()
 
     for store_name, handler in STORE_HANDLERS.items():
         logger.info(f"Verificando login para {handler.display_name}...")
 
-        # 1. Carregar cookies salvos
-        load_store_cookies(drv, handler.name, handler.domain_url)
-
-        # 2. Verificar se está logado
-        if handler.is_logged_in(drv):
+        if await handler.is_logged_in(browser):
             logger.info(f"{handler.display_name}: sessão ativa")
             _logged_in_stores.add(handler.name)
             continue
 
-        # 3. Se headless, não pode fazer login interativo
         if config.HEADLESS:
             logger.warning(
                 f"{handler.display_name}: sem sessão válida (headless, não é possível login interativo). "
@@ -44,41 +41,40 @@ def ensure_store_logins(drv):
             )
             continue
 
-        # 4. Login manual (modo local)
         logger.info(f"{handler.display_name}: sessão expirada, iniciando login manual...")
-        if handler.login(drv):
-            save_store_cookies(drv, handler.name)
+        if await handler.login(browser):
             _logged_in_stores.add(handler.name)
-            logger.info(f"{handler.display_name}: login realizado e cookies salvos")
+            logger.info(f"{handler.display_name}: login realizado")
         else:
             logger.error(f"{handler.display_name}: falha no login")
 
 
-def _ensure_driver():
-    """Recria o driver se ele morreu."""
-    global driver
+async def _ensure_browser():
+    """Recria o browser se ele morreu."""
+    global browser
     try:
-        driver.current_url
+        _ = browser.tabs
     except Exception:
-        logger.warning("WebDriver inativo, recriando...")
+        logger.warning("Browser inativo, recriando...")
         try:
-            driver.quit()
+            browser.stop()
         except Exception:
             pass
-        driver = get_driver()
-        ensure_store_logins(driver)
-        logger.info("WebDriver recriado com sucesso")
+        browser = await get_browser()
+        await ensure_store_logins()
+        logger.info("Browser recriado com sucesso")
 
 
-def scrape_and_send():
-    global driver
+async def scrape_and_send():
+    global browser
     logger.info("=" * 60)
     logger.info("Início do ciclo de scraping")
     logger.info("=" * 60)
 
     try:
-        _ensure_driver()
-        products = scrape_pelando(driver, _logged_in_stores)
+        await _ensure_browser()
+        tab = browser.main_tab
+        products = await scrape_pelando(tab, _logged_in_stores)
 
         if not products:
             logger.info("Nenhum produto novo encontrado neste ciclo")
@@ -93,11 +89,9 @@ def scrape_and_send():
                 try:
                     used_titles = db.get_used_titles()
                     message = generate_message(product, used_titles=used_titles)
-                    # Salvar frase de abertura usada
                     title = extract_title(message)
                     if title:
                         db.save_used_title(title)
-                    # Adicionar linha de cupom com formatação monospace (backticks)
                     if product.coupon:
                         message = f"{message}\n\n`Cupom de {product.coupon}`"
                 except Exception as e:
@@ -119,11 +113,11 @@ def scrape_and_send():
                     errors += 1
                     continue
 
-                # Determinar canais por loja (busca TELEGRAM_CHAT_IDS_{STORE}, fallback para default)
+                # Determinar canais por loja
                 tg_ids = config.get_telegram_ids(product.store) if product.store else config.TELEGRAM_CHAT_IDS
                 wa_ids = config.get_whatsapp_ids(product.store) if product.store else config.WHATSAPP_GROUP_IDS
 
-                # Enviar para canais - rastrear sucesso
+                # Enviar para canais
                 telegram_ok = False
                 whatsapp_ok = False
 
@@ -149,7 +143,6 @@ def scrape_and_send():
                 except Exception as e:
                     logger.error(f"ERRO WhatsApp para {product.mlb_id} ({product.title[:50]}): {e}")
 
-                # Só salva no banco se pelo menos um canal teve sucesso
                 if telegram_ok or whatsapp_ok:
                     db.save_product(product)
                     processed += 1
@@ -172,8 +165,9 @@ def scrape_and_send():
         logger.error(f"ERRO no ciclo de scraping: {e}")
 
 
-def shutdown(signum, frame):
-    global driver, scheduler, _shutting_down
+def shutdown_sync():
+    """Shutdown síncrono para signal handlers."""
+    global browser, scheduler, _shutting_down
     if _shutting_down:
         return
     _shutting_down = True
@@ -185,20 +179,18 @@ def shutdown(signum, frame):
         except Exception:
             pass
 
-    if driver:
+    if browser:
         try:
-            driver.quit()
-            logger.info("WebDriver encerrado")
+            browser.stop()
+            logger.info("Browser encerrado")
         except Exception:
             pass
 
     stop_virtual_display()
 
-    sys.exit(0)
 
-
-def main():
-    global driver, scheduler
+async def main():
+    global browser, scheduler
 
     config.setup_logging()
     logger.info("KOP-ML iniciando...")
@@ -207,22 +199,23 @@ def main():
     db.init_db()
 
     # Inicializar browser e verificar logins
-    driver = get_driver()
-    ensure_store_logins(driver)
+    browser = await get_browser()
+    await ensure_store_logins()
 
     # Registrar signal handlers para graceful shutdown
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, shutdown_sync)
 
     # Limpar dados antigos ao iniciar
     db.cleanup_old_products(days=7)
     db.cleanup_old_deals(days=1)
 
     # Executar primeira vez imediatamente
-    scrape_and_send()
+    await scrape_and_send()
 
     # Agendar execuções periódicas
-    scheduler = BlockingScheduler()
+    scheduler = AsyncIOScheduler()
     scheduler.add_job(
         scrape_and_send,
         "interval",
@@ -251,11 +244,17 @@ def main():
         f"Scheduler iniciado - scraping a cada {config.SCRAPE_INTERVAL_SECONDS}s, limpeza diária às 03:00, reset títulos às 00:00"
     )
 
+    scheduler.start()
+
+    # Manter o event loop rodando até sinal de shutdown
     try:
-        scheduler.start()
+        while not _shutting_down:
+            await asyncio.sleep(1)
     except (KeyboardInterrupt, SystemExit):
-        shutdown(None, None)
+        pass
+    finally:
+        shutdown_sync()
 
 
 if __name__ == "__main__":
-    main()
+    uc.loop().run_until_complete(main())
