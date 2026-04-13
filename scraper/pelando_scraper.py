@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 import nodriver
@@ -34,9 +35,10 @@ async def _bypass_cloudflare_turnstile(
     for attempt in range(1, max_retries + 1):
         await tab.sleep(interval)
 
-        info = await tab.evaluate(
+        # JSON.stringify pra contornar bug do nodriver com objetos JS em evaluate
+        raw = await tab.evaluate(
             """
-            (() => {
+            JSON.stringify((() => {
                 const iframe = document.querySelector(
                     'iframe[src*="challenges.cloudflare.com"]'
                 );
@@ -47,10 +49,13 @@ async def _bypass_cloudflare_turnstile(
                     x: r.left, y: r.top, w: r.width, h: r.height,
                     visible: r.width > 0 && r.height > 0,
                 };
-            })()
-            """,
-            return_by_value=True,
+            })())
+            """
         )
+        try:
+            info = json.loads(raw) if isinstance(raw, str) else {}
+        except (TypeError, ValueError):
+            info = {}
 
         if not info or not info.get("present"):
             logger.info(f"Turnstile resolvido (iframe ausente) — tentativa {attempt}")
@@ -107,8 +112,9 @@ async def get_deals(tab: nodriver.Tab, store_filter: str | None = None) -> list[
         return []
 
     # Extrair dados dos cards via JavaScript (mais rápido e robusto que select_all)
-    deals_data = await tab.evaluate("""
-        (() => {
+    # JSON.stringify pra contornar bug do nodriver com objetos/arrays em evaluate
+    deals_raw = await tab.evaluate("""
+        JSON.stringify((() => {
             const cards = Array.from(document.querySelectorAll("div[data-show-author]"));
             return cards.map(card => {
                 const titleEl = card.querySelector("h3[class*='title'] a");
@@ -129,8 +135,12 @@ async def get_deals(tab: nodriver.Tab, store_filter: str | None = None) -> list[
                     is_expired: isExpired,
                 };
             });
-        })()
-    """, return_by_value=True)
+        })())
+    """)
+    try:
+        deals_data = json.loads(deals_raw) if isinstance(deals_raw, str) else []
+    except (TypeError, ValueError):
+        deals_data = []
 
     if not deals_data:
         logger.warning("Nenhum card extraído via JS")

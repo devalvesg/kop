@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 import requests
@@ -231,8 +232,8 @@ class MercadoLivreStore(BaseStore):
             await tab
             mlb_id = self._extract_mlb_id(tab.url)
 
-            data = await tab.evaluate("""
-                (() => {
+            data_raw = await tab.evaluate("""
+                JSON.stringify((() => {
                     // Título
                     const titleEl = document.querySelector('h1.ui-pdp-title');
                     const title = titleEl?.textContent?.trim() || '';
@@ -311,8 +312,12 @@ class MercadoLivreStore(BaseStore):
                     }
 
                     return { title, price, originalPrice, imageUrl, rating, salesInfo, coupon };
-                })()
-            """, return_by_value=True)
+                })())
+            """)
+            try:
+                data = json.loads(data_raw) if isinstance(data_raw, str) else None
+            except (TypeError, ValueError):
+                data = None
 
             if not data or not data.get("title"):
                 title = deal.title  # Fallback para título do Pelando

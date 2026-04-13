@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 
@@ -171,8 +172,8 @@ class AmazonStore(BaseStore):
         try:
             product_id = self._extract_asin(url)
 
-            data = await tab.evaluate("""
-                (() => {
+            data_raw = await tab.evaluate("""
+                JSON.stringify((() => {
                     const title = document.querySelector('#productTitle')?.textContent?.trim() || '';
 
                     // Preço
@@ -211,8 +212,12 @@ class AmazonStore(BaseStore):
                     const coupon = couponEl?.textContent?.trim() || '';
 
                     return { title, price, originalPrice, imageUrl, rating, coupon };
-                })()
-            """, return_by_value=True)
+                })())
+            """)
+            try:
+                data = json.loads(data_raw) if isinstance(data_raw, str) else None
+            except (TypeError, ValueError):
+                data = None
 
             if not data or not data.get("title"):
                 logger.warning("Título do produto não encontrado")
