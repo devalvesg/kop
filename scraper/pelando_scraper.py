@@ -48,7 +48,8 @@ async def _bypass_cloudflare_turnstile(
                     visible: r.width > 0 && r.height > 0,
                 };
             })()
-            """
+            """,
+            return_by_value=True,
         )
 
         if not info or not info.get("present"):
@@ -129,7 +130,7 @@ async def get_deals(tab: nodriver.Tab, store_filter: str | None = None) -> list[
                 };
             });
         })()
-    """)
+    """, return_by_value=True)
 
     if not deals_data:
         logger.warning("Nenhum card extraído via JS")

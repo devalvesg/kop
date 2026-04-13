@@ -312,7 +312,7 @@ class MercadoLivreStore(BaseStore):
 
                     return { title, price, originalPrice, imageUrl, rating, salesInfo, coupon };
                 })()
-            """)
+            """, return_by_value=True)
 
             if not data or not data.get("title"):
                 title = deal.title  # Fallback para título do Pelando

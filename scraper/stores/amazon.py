@@ -212,7 +212,7 @@ class AmazonStore(BaseStore):
 
                     return { title, price, originalPrice, imageUrl, rating, coupon };
                 })()
-            """)
+            """, return_by_value=True)
 
             if not data or not data.get("title"):
                 logger.warning("Título do produto não encontrado")
