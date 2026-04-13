@@ -20,6 +20,60 @@ def _is_coupon_only(title: str) -> bool:
     return title_lower.startswith("cupom")
 
 
+async def _bypass_cloudflare_turnstile(
+    tab: nodriver.Tab, max_retries: int = 20, interval: float = 2.0
+) -> bool:
+    """Bypass do Cloudflare Turnstile clicando no iframe do challenge via CDP.
+
+    O verify_cf nativo do nodriver usa template matching OpenCV com imagem em inglês,
+    o que falha no Pelando (português). Aqui fazemos localização DOM do iframe e clique
+    direto nas coordenadas do checkbox.
+
+    Retorna True se o challenge foi resolvido (iframe sumiu), False após esgotar retries.
+    """
+    for attempt in range(1, max_retries + 1):
+        await tab.sleep(interval)
+
+        info = await tab.evaluate(
+            """
+            (() => {
+                const iframe = document.querySelector(
+                    'iframe[src*="challenges.cloudflare.com"]'
+                );
+                if (!iframe) return { present: false };
+                const r = iframe.getBoundingClientRect();
+                return {
+                    present: true,
+                    x: r.left, y: r.top, w: r.width, h: r.height,
+                    visible: r.width > 0 && r.height > 0,
+                };
+            })()
+            """
+        )
+
+        if not info or not info.get("present"):
+            logger.info(f"Turnstile resolvido (iframe ausente) — tentativa {attempt}")
+            return True
+
+        if not info.get("visible"):
+            continue
+
+        # Checkbox fica na lateral esquerda do widget (~30px da borda), centro vertical
+        click_x = info["x"] + 30
+        click_y = info["y"] + info["h"] / 2
+        logger.info(
+            f"Turnstile tentativa {attempt}/{max_retries}: "
+            f"clicando em ({click_x:.0f}, {click_y:.0f})"
+        )
+        try:
+            await tab.mouse_click(click_x, click_y)
+        except Exception as e:
+            logger.warning(f"mouse_click falhou: {e}")
+
+    logger.error(f"Turnstile não bypassado após {max_retries} tentativas")
+    return False
+
+
 async def get_deals(tab: nodriver.Tab, store_filter: str | None = None) -> list[PelandoDeal]:
     """
     Extrai deals do Pelando na aba "Recentes".
@@ -36,14 +90,13 @@ async def get_deals(tab: nodriver.Tab, store_filter: str | None = None) -> list[
 
     await tab.get(config.PELANDO_URL)
 
-    # Bypass Cloudflare Turnstile (principal motivação da migração para nodriver)
-    try:
-        await tab.verify_cf()
-        logger.info("Cloudflare verify_cf executado")
-    except Exception as e:
-        logger.warning(f"verify_cf falhou (pode não ter challenge): {e}")
-
-    await tab.sleep(2)
+    # Bypass Cloudflare Turnstile via click direto no iframe (verify_cf nativo
+    # usa template match em inglês e não funciona no Pelando em português)
+    bypassed = await _bypass_cloudflare_turnstile(tab)
+    if not bypassed:
+        await tab.save_screenshot("/tmp/pelando_cf_failed.png")
+        logger.error("Cloudflare Turnstile não bypassado. Screenshot: /tmp/pelando_cf_failed.png")
+        return []
 
     # Aguardar cards carregarem
     card = await tab.select("div[data-show-author]", timeout=45)
