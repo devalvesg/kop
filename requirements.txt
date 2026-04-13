@@ -1,4 +1,5 @@
 nodriver
+playwright==1.58.0
 opencv-python-headless
 groq==0.15.0
 python-telegram-bot==21.9

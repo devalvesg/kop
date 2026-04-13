@@ -138,6 +138,7 @@ su - kop -c "
     $PYTHON_CMD -m venv venv
     venv/bin/pip install --upgrade pip
     venv/bin/pip install -r requirements.txt
+    venv/bin/playwright install chromium
 "
 
 # Node.js deps

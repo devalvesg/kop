@@ -21,6 +21,11 @@ sudo -u kop git reset --hard origin/main
 echo "[DEPLOY] Verificando dependências Python..."
 sudo -u kop venv/bin/pip install -q -r requirements.txt
 
+# 2.1. Garantir chromium do Playwright (usado pelo nodriver — snap chromium
+# do Ubuntu é incompatível com CDP). Idempotente: no-op se já instalado.
+echo "[DEPLOY] Garantindo chromium do Playwright..."
+sudo -u kop venv/bin/playwright install chromium
+
 # 3. Atualizar dependências Node
 echo "[DEPLOY] Verificando dependências Node..."
 sudo -u kop bash -c "cd $APP_DIR/whatsapp_bridge && npm ci --omit=dev --silent 2>/dev/null"

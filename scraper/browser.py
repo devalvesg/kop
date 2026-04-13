@@ -15,6 +15,29 @@ _display: Display | None = None
 CHROME_PROFILE_DIR = os.path.join(config._data_dir, "chrome_profile")
 
 
+def _resolve_chrome_binary() -> str | None:
+    """Resolve o binário do Chrome.
+
+    Prioridade: CHROME_BINARY (env) → chromium do Playwright (cache local).
+    O snap chromium do Ubuntu é inutilizável para automação (confinamento +
+    problemas com CDP), por isso em produção usamos o chromium bundled do
+    Playwright que é baixado via `playwright install chromium`.
+    """
+    if config.CHROME_BINARY:
+        return config.CHROME_BINARY
+
+    # Fallback: chromium do Playwright em ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome
+    cache_glob = os.path.expanduser(
+        "~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"
+    )
+    matches = sorted(glob.glob(cache_glob))
+    if matches:
+        logger.info(f"Usando chromium do Playwright: {matches[-1]}")
+        return matches[-1]
+
+    return None
+
+
 def _kill_zombie_chromes():
     """Mata processos Chrome órfãos que podem estar travando o user_data_dir."""
     try:
@@ -89,7 +112,7 @@ async def get_browser() -> uc.Browser:
         sandbox=False,
         user_data_dir=CHROME_PROFILE_DIR,
         browser_args=browser_args,
-        browser_executable_path=config.CHROME_BINARY or None,
+        browser_executable_path=_resolve_chrome_binary(),
     )
 
     logger.info("nodriver browser criado com sucesso")

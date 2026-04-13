@@ -11,8 +11,10 @@ WorkingDirectory=/opt/kop-ml
 EnvironmentFile=/opt/kop-ml/.env.prod
 Environment=APP_ENV=prod
 Environment=HEADLESS=true
-Environment=CHROME_BINARY=/usr/bin/chromium-browser
-Environment=CHROMEDRIVER_PATH=/usr/bin/chromedriver
+# CHROME_BINARY vazio: scraper/browser.py usa chromium do Playwright
+# (~/.cache/ms-playwright/chromium-*/chrome-linux/chrome). O snap chromium do
+# Ubuntu é incompatível com nodriver (confinamento bloqueia CDP).
+Environment=CHROME_BINARY=
 ExecStart=/opt/kop-ml/venv/bin/python main.py
 Restart=on-failure
 RestartSec=10
