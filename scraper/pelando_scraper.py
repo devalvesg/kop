@@ -48,6 +48,8 @@ async def _bypass_cloudflare_turnstile(
     for attempt in range(1, max_retries + 1):
         await tab.sleep(interval)
 
+        # Busca que atravessa shadow roots — o Cloudflare interstitial v2
+        # embala o Turnstile em shadow DOM, então querySelector normal não vê.
         raw = await tab.evaluate(
             f"""
             JSON.stringify((() => {{
@@ -55,22 +57,42 @@ async def _bypass_cloudflare_turnstile(
                 if (cards.length > 0) return {{ cards: cards.length }};
 
                 const selectors = {selectors_js};
-                for (const sel of selectors) {{
-                    const iframe = document.querySelector(sel);
-                    if (iframe) {{
-                        const r = iframe.getBoundingClientRect();
-                        return {{
-                            sel: sel,
-                            x: r.left, y: r.top, w: r.width, h: r.height,
-                            visible: r.width > 0 && r.height > 0,
-                            src: (iframe.src || "").slice(0, 80),
-                        }};
+
+                // Walk todos os nós, incluindo shadow roots, contando iframes
+                // e procurando match nos selectors.
+                let totalIframes = 0;
+                let found = null;
+                const stack = [document];
+                while (stack.length && !found) {{
+                    const root = stack.pop();
+                    const iframes = root.querySelectorAll("iframe");
+                    totalIframes += iframes.length;
+                    for (const sel of selectors) {{
+                        const el = root.querySelector(sel);
+                        if (el) {{
+                            const r = el.getBoundingClientRect();
+                            found = {{
+                                sel: sel,
+                                x: r.left, y: r.top, w: r.width, h: r.height,
+                                visible: r.width > 0 && r.height > 0,
+                                src: (el.src || "").slice(0, 80),
+                            }};
+                            break;
+                        }}
+                    }}
+                    if (found) break;
+                    // Empilha shadow roots de todos os elementos desse nível
+                    const all = root.querySelectorAll("*");
+                    for (const el of all) {{
+                        if (el.shadowRoot) stack.push(el.shadowRoot);
                     }}
                 }}
+
+                if (found) return found;
                 return {{
                     nothing: true,
                     title: document.title,
-                    iframe_count: document.querySelectorAll("iframe").length,
+                    iframe_count: totalIframes,
                 }};
             }})())
             """
