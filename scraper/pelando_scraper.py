@@ -22,34 +22,57 @@ def _is_coupon_only(title: str) -> bool:
 
 
 async def _bypass_cloudflare_turnstile(
-    tab: nodriver.Tab, max_retries: int = 20, interval: float = 2.0
+    tab: nodriver.Tab, max_retries: int = 25, interval: float = 2.5
 ) -> bool:
     """Bypass do Cloudflare Turnstile clicando no iframe do challenge via CDP.
 
     O verify_cf nativo do nodriver usa template matching OpenCV com imagem em inglês,
-    o que falha no Pelando (português). Aqui fazemos localização DOM do iframe e clique
-    direto nas coordenadas do checkbox.
+    o que falha no Pelando (português). Aqui fazemos localização DOM do iframe e
+    clique direto nas coordenadas do checkbox via CDP.
 
-    Retorna True se o challenge foi resolvido (iframe sumiu), False após esgotar retries.
+    Critério de sucesso: presença dos cards reais da página (`div[data-show-author]`).
+    Isso evita falsos positivos quando o iframe ainda não renderizou.
     """
+    # Várias strats pra achar o iframe do Turnstile — o src varia entre managed
+    # challenge, interstitial e widget embedded
+    selectors = [
+        'iframe[src*="challenges.cloudflare.com"]',
+        'iframe[src*="cloudflare.com"]',
+        'iframe[src*="turnstile"]',
+        'iframe[title*="Cloudflare"]',
+        'iframe[title*="challenge"]',
+        'iframe[id^="cf-chl-widget"]',
+    ]
+    selectors_js = json.dumps(selectors)
+
     for attempt in range(1, max_retries + 1):
         await tab.sleep(interval)
 
-        # JSON.stringify pra contornar bug do nodriver com objetos JS em evaluate
         raw = await tab.evaluate(
-            """
-            JSON.stringify((() => {
-                const iframe = document.querySelector(
-                    'iframe[src*="challenges.cloudflare.com"]'
-                );
-                if (!iframe) return { present: false };
-                const r = iframe.getBoundingClientRect();
-                return {
-                    present: true,
-                    x: r.left, y: r.top, w: r.width, h: r.height,
-                    visible: r.width > 0 && r.height > 0,
-                };
-            })())
+            f"""
+            JSON.stringify((() => {{
+                const cards = document.querySelectorAll("div[data-show-author]");
+                if (cards.length > 0) return {{ cards: cards.length }};
+
+                const selectors = {selectors_js};
+                for (const sel of selectors) {{
+                    const iframe = document.querySelector(sel);
+                    if (iframe) {{
+                        const r = iframe.getBoundingClientRect();
+                        return {{
+                            sel: sel,
+                            x: r.left, y: r.top, w: r.width, h: r.height,
+                            visible: r.width > 0 && r.height > 0,
+                            src: (iframe.src || "").slice(0, 80),
+                        }};
+                    }}
+                }}
+                return {{
+                    nothing: true,
+                    title: document.title,
+                    iframe_count: document.querySelectorAll("iframe").length,
+                }};
+            }})())
             """
         )
         try:
@@ -57,24 +80,35 @@ async def _bypass_cloudflare_turnstile(
         except (TypeError, ValueError):
             info = {}
 
-        if not info or not info.get("present"):
-            logger.info(f"Turnstile resolvido (iframe ausente) — tentativa {attempt}")
+        if info.get("cards"):
+            logger.info(
+                f"Turnstile resolvido — {info['cards']} cards detectados "
+                f"(tentativa {attempt})"
+            )
             return True
 
-        if not info.get("visible"):
-            continue
-
-        # Checkbox fica na lateral esquerda do widget (~30px da borda), centro vertical
-        click_x = info["x"] + 30
-        click_y = info["y"] + info["h"] / 2
-        logger.info(
-            f"Turnstile tentativa {attempt}/{max_retries}: "
-            f"clicando em ({click_x:.0f}, {click_y:.0f})"
-        )
-        try:
-            await tab.mouse_click(click_x, click_y)
-        except Exception as e:
-            logger.warning(f"mouse_click falhou: {e}")
+        if info.get("sel"):
+            if not info.get("visible"):
+                logger.debug(f"Tentativa {attempt}: iframe {info['sel']} invisível")
+                continue
+            # Checkbox fica na lateral esquerda do widget (~30px), centro vertical
+            click_x = info["x"] + 30
+            click_y = info["y"] + info["h"] / 2
+            logger.info(
+                f"Turnstile tentativa {attempt}/{max_retries}: clicando "
+                f"({click_x:.0f},{click_y:.0f}) via {info['sel']}"
+            )
+            try:
+                await tab.mouse_click(click_x, click_y)
+            except Exception as e:
+                logger.warning(f"mouse_click falhou: {e}")
+        else:
+            # Nem cards, nem iframe CF — página ainda carregando ou estado desconhecido
+            if attempt <= 5 or attempt % 5 == 0:
+                logger.info(
+                    f"Tentativa {attempt}: aguardando — title='{info.get('title', '?')}' "
+                    f"iframes={info.get('iframe_count', '?')}"
+                )
 
     logger.error(f"Turnstile não bypassado após {max_retries} tentativas")
     return False
