@@ -21,80 +21,52 @@ def _is_coupon_only(title: str) -> bool:
     return title_lower.startswith("cupom")
 
 
-async def _bypass_cloudflare_turnstile(
+async def _bypass_cloudflare_challenge(
     tab: nodriver.Tab, max_retries: int = 25, interval: float = 2.5
 ) -> bool:
-    """Bypass do Cloudflare Turnstile clicando no iframe do challenge via CDP.
+    """Bypass do challenge do Cloudflare no Pelando.
 
-    O verify_cf nativo do nodriver usa template matching OpenCV com imagem em inglês,
-    o que falha no Pelando (português). Aqui fazemos localização DOM do iframe e
-    clique direto nas coordenadas do checkbox via CDP.
+    A página serve um interstitial simples com botão "Verify you are human"
+    (não é o Turnstile widget). Localizamos o botão via DOM (sem iframe,
+    sem shadow DOM) e clicamos nas coordenadas via CDP mouse_click — usar
+    user gesture real ajuda a passar a verificação de automação do CF.
 
-    Critério de sucesso: presença dos cards reais da página (`div[data-show-author]`).
-    Isso evita falsos positivos quando o iframe ainda não renderizou.
+    Critério de sucesso: presença dos cards reais (`div[data-show-author]`).
     """
-    # Várias strats pra achar o iframe do Turnstile — o src varia entre managed
-    # challenge, interstitial e widget embedded
-    selectors = [
-        'iframe[src*="challenges.cloudflare.com"]',
-        'iframe[src*="cloudflare.com"]',
-        'iframe[src*="turnstile"]',
-        'iframe[title*="Cloudflare"]',
-        'iframe[title*="challenge"]',
-        'iframe[id^="cf-chl-widget"]',
-    ]
-    selectors_js = json.dumps(selectors)
-
     for attempt in range(1, max_retries + 1):
         await tab.sleep(interval)
 
-        # Busca que atravessa shadow roots — o Cloudflare interstitial v2
-        # embala o Turnstile em shadow DOM, então querySelector normal não vê.
         raw = await tab.evaluate(
-            f"""
-            JSON.stringify((() => {{
+            """
+            JSON.stringify((() => {
                 const cards = document.querySelectorAll("div[data-show-author]");
-                if (cards.length > 0) return {{ cards: cards.length }};
+                if (cards.length > 0) return { cards: cards.length };
 
-                const selectors = {selectors_js};
+                // Procura botão/link do CF por texto (case-insensitive) em
+                // qualquer elemento clicável visível.
+                const candidates = Array.from(document.querySelectorAll(
+                    "button, a, input[type='button'], input[type='submit'], [role='button']"
+                ));
+                const needle = "verify you are human";
+                for (const el of candidates) {
+                    const text = (el.textContent || el.value || "").trim().toLowerCase();
+                    if (!text.includes(needle)) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width <= 0 || r.height <= 0) continue;
+                    return {
+                        btn: true,
+                        tag: el.tagName,
+                        x: r.left, y: r.top, w: r.width, h: r.height,
+                    };
+                }
 
-                // Walk todos os nós, incluindo shadow roots, contando iframes
-                // e procurando match nos selectors.
-                let totalIframes = 0;
-                let found = null;
-                const stack = [document];
-                while (stack.length && !found) {{
-                    const root = stack.pop();
-                    const iframes = root.querySelectorAll("iframe");
-                    totalIframes += iframes.length;
-                    for (const sel of selectors) {{
-                        const el = root.querySelector(sel);
-                        if (el) {{
-                            const r = el.getBoundingClientRect();
-                            found = {{
-                                sel: sel,
-                                x: r.left, y: r.top, w: r.width, h: r.height,
-                                visible: r.width > 0 && r.height > 0,
-                                src: (el.src || "").slice(0, 80),
-                            }};
-                            break;
-                        }}
-                    }}
-                    if (found) break;
-                    // Empilha shadow roots de todos os elementos desse nível
-                    const all = root.querySelectorAll("*");
-                    for (const el of all) {{
-                        if (el.shadowRoot) stack.push(el.shadowRoot);
-                    }}
-                }}
-
-                if (found) return found;
-                return {{
+                return {
                     nothing: true,
                     title: document.title,
-                    iframe_count: totalIframes,
-                }};
-            }})())
+                    url: location.href.slice(0, 120),
+                    btn_count: candidates.length,
+                };
+            })())
             """
         )
         try:
@@ -104,35 +76,33 @@ async def _bypass_cloudflare_turnstile(
 
         if info.get("cards"):
             logger.info(
-                f"Turnstile resolvido — {info['cards']} cards detectados "
+                f"Challenge resolvido — {info['cards']} cards detectados "
                 f"(tentativa {attempt})"
             )
             return True
 
-        if info.get("sel"):
-            if not info.get("visible"):
-                logger.debug(f"Tentativa {attempt}: iframe {info['sel']} invisível")
-                continue
-            # Checkbox fica na lateral esquerda do widget (~30px), centro vertical
-            click_x = info["x"] + 30
+        if info.get("btn"):
+            click_x = info["x"] + info["w"] / 2
             click_y = info["y"] + info["h"] / 2
             logger.info(
-                f"Turnstile tentativa {attempt}/{max_retries}: clicando "
-                f"({click_x:.0f},{click_y:.0f}) via {info['sel']}"
+                f"Challenge tentativa {attempt}/{max_retries}: clicando botão "
+                f"{info['tag']} em ({click_x:.0f},{click_y:.0f})"
             )
             try:
+                # Mouse move antes do click pra parecer gesto humano
+                await tab.mouse_move(click_x, click_y)
+                await tab.sleep(0.3)
                 await tab.mouse_click(click_x, click_y)
             except Exception as e:
                 logger.warning(f"mouse_click falhou: {e}")
         else:
-            # Nem cards, nem iframe CF — página ainda carregando ou estado desconhecido
             if attempt <= 5 or attempt % 5 == 0:
                 logger.info(
                     f"Tentativa {attempt}: aguardando — title='{info.get('title', '?')}' "
-                    f"iframes={info.get('iframe_count', '?')}"
+                    f"url='{info.get('url', '?')}' botões={info.get('btn_count', '?')}"
                 )
 
-    logger.error(f"Turnstile não bypassado após {max_retries} tentativas")
+    logger.error(f"Challenge não bypassado após {max_retries} tentativas")
     return False
 
 
@@ -152,12 +122,11 @@ async def get_deals(tab: nodriver.Tab, store_filter: str | None = None) -> list[
 
     await tab.get(config.PELANDO_URL)
 
-    # Bypass Cloudflare Turnstile via click direto no iframe (verify_cf nativo
-    # usa template match em inglês e não funciona no Pelando em português)
-    bypassed = await _bypass_cloudflare_turnstile(tab)
+    # Bypass do challenge do CF — procura botão "Verify you are human" e clica
+    bypassed = await _bypass_cloudflare_challenge(tab)
     if not bypassed:
         await tab.save_screenshot("/tmp/pelando_cf_failed.png")
-        logger.error("Cloudflare Turnstile não bypassado. Screenshot: /tmp/pelando_cf_failed.png")
+        logger.error("Cloudflare challenge não bypassado. Screenshot: /tmp/pelando_cf_failed.png")
         return []
 
     # Aguardar cards carregarem
