@@ -36,6 +36,16 @@ async def _bypass_cloudflare_challenge(
     for attempt in range(1, max_retries + 1):
         await tab.sleep(interval)
 
+        # Debug one-shot: dump HTML da página CF pra análise offline
+        if attempt == 1:
+            try:
+                html = await tab.get_content()
+                with open("/tmp/pelando_cf_page.html", "w") as fh:
+                    fh.write(html)
+                logger.info(f"HTML CF dumpado: /tmp/pelando_cf_page.html ({len(html)} bytes)")
+            except Exception as e:
+                logger.warning(f"Falha ao dumpar HTML CF: {e}")
+
         raw = await tab.evaluate(
             """
             JSON.stringify((() => {
